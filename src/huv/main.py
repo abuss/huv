@@ -25,7 +25,6 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-import textwrap
 
 
 class HierarchicalUV:
@@ -146,7 +145,7 @@ class HierarchicalUV:
             return
 
         # Read the original script
-        with open(activate_script, "r") as f:
+        with open(activate_script) as f:
             content = f.read()
 
         # Find the deactivate function and add PYTHONPATH restoration
@@ -217,7 +216,7 @@ fi
             return
 
         # Read the original script
-        with open(activate_this, "r") as f:
+        with open(activate_this) as f:
             content = f.read()
 
         # Detect Python version from the existing script
@@ -280,7 +279,7 @@ sys.path[:0] = new_paths
             return None
 
         try:
-            with open(activate_script, "r") as f:
+            with open(activate_script) as f:
                 content = f.read()
                 # Look for the PARENT_VENV_PATH line
                 match = re.search(r'PARENT_VENV_PATH="([^"]*)"', content)
@@ -621,77 +620,72 @@ sys.path[:0] = new_paths
             )
             sys.exit(e.returncode)
 
+    def passthrough_command(self, args):
+        """Pass through commands directly to uv"""
+        cmd = [self.uv_executable] + args
+
+        try:
+            # Use execvp to replace the current process with uv
+            # This ensures that uv gets the exact same environment and signal handling
+            os.execvp(self.uv_executable, cmd)
+        except OSError as e:
+            print(f"❌ Failed to execute uv: {e}", file=sys.stderr)
+            sys.exit(1)
+
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Hierarchical UV Virtual Environment Manager",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=textwrap.dedent("""
-        Examples:
-            # Create a root environment
-            huv venv .vroot
-            
-            # Create a child environment that inherits from .vroot
-            huv venv .vchild --parent .vroot
-            
-            # Install packages (skips packages available from parent)
-            huv pip install numpy requests
-            
-            # Uninstall packages (shows what remains available from parent)
-            huv pip uninstall requests
-        """),
-    )
-
-    # Use subparsers for different commands
-    subparsers = parser.add_subparsers(dest="command", help="Available commands")
-
-    # venv subcommand
-    venv_parser = subparsers.add_parser("venv", help="Create virtual environment")
-    venv_parser.add_argument("path", help="Path for the virtual environment")
-    venv_parser.add_argument("--parent", help="Parent virtual environment path")
-
-    # pip subcommand
-    pip_parser = subparsers.add_parser(
-        "pip", help="Package management with hierarchy awareness"
-    )
-    pip_subparsers = pip_parser.add_subparsers(dest="pip_command", help="pip commands")
-
-    # pip install
-    install_parser = pip_subparsers.add_parser(
-        "install", help="Install packages (skips parent dependencies)"
-    )
-    install_parser.add_argument("packages", nargs="+", help="Packages to install")
-
-    # pip uninstall
-    uninstall_parser = pip_subparsers.add_parser(
-        "uninstall", help="Uninstall packages from current environment"
-    )
-    uninstall_parser.add_argument("packages", nargs="+", help="Packages to uninstall")
-
-    # Parse known args to allow passing through uv options
-    args, unknown_args = parser.parse_known_args()
-
-    if not args.command:
-        parser.print_help()
-        sys.exit(1)
-
     huv = HierarchicalUV()
 
-    if args.command == "venv":
-        huv.create_venv(args.path, args.parent, unknown_args)
-    elif args.command == "pip":
-        if not args.pip_command:
-            pip_parser.print_help()
-            sys.exit(1)
-        elif args.pip_command == "install":
-            huv.pip_install(args.packages, unknown_args)
-        elif args.pip_command == "uninstall":
-            huv.pip_uninstall(args.packages, unknown_args)
+    # Check if this is a huv-specific command that needs special handling
+    if len(sys.argv) >= 2:
+        if sys.argv[1] == "venv" and "--parent" in sys.argv:
+            # Handle hierarchical venv creation
+            parser = argparse.ArgumentParser(
+                description="Create hierarchical virtual environment"
+            )
+            parser.add_argument("command")  # venv
+            parser.add_argument("path", help="Path for the virtual environment")
+            parser.add_argument("--parent", help="Parent virtual environment path")
+            args, unknown_args = parser.parse_known_args()
+            huv.create_venv(args.path, args.parent, unknown_args)
+            return
+
+        elif (
+            sys.argv[1] == "pip"
+            and len(sys.argv) >= 3
+            and sys.argv[2] in ["install", "uninstall"]
+        ):
+            # Handle hierarchical pip commands
+            if sys.argv[2] == "install":
+                parser = argparse.ArgumentParser(
+                    description="Install packages with hierarchy awareness"
+                )
+                parser.add_argument("command")  # pip
+                parser.add_argument("subcommand")  # install
+                parser.add_argument("packages", nargs="+", help="Packages to install")
+                args, unknown_args = parser.parse_known_args()
+                huv.pip_install(args.packages, unknown_args)
+                return
+
+            elif sys.argv[2] == "uninstall":
+                parser = argparse.ArgumentParser(
+                    description="Uninstall packages with hierarchy awareness"
+                )
+                parser.add_argument("command")  # pip
+                parser.add_argument("subcommand")  # uninstall
+                parser.add_argument("packages", nargs="+", help="Packages to uninstall")
+                args, unknown_args = parser.parse_known_args()
+                huv.pip_uninstall(args.packages, unknown_args)
+                return
+
+    # For all other commands, pass through to uv
+    # Remove the script name and pass everything else
+    if len(sys.argv) > 1:
+        huv.passthrough_command(sys.argv[1:])
     else:
-        parser.print_help()
-        sys.exit(1)
+        # No arguments - show uv help
+        huv.passthrough_command(["--help"])
 
 
 if __name__ == "__main__":
     main()
-

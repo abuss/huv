@@ -4,15 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "huv"
-version = "0.1.0"
+version = "0.2.0"
 description = "Hierarchical UV Virtual Environment Manager"
 readme = "README.md"
 license = "MIT"
 authors = [
-    { name = "Hierarchical Virtual Environment Team", email = "hvenv@example.com" },
-]
-maintainers = [
-    { name = "Hierarchical Virtual Environment Team", email = "hvenv@example.com" },
+    { name = "Antal Buss" },
 ]
 keywords = [
     "virtual-environment",
