@@ -13,7 +13,7 @@ Features:
 - Drop-in replacement for uv with added hierarchy features
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __author__ = "Hierarchical Virtual Environment Team"
 __email__ = "hvenv@example.com"
 __description__ = "Hierarchical UV Virtual Environment Manager"
@@ -21,3 +21,4 @@ __description__ = "Hierarchical UV Virtual Environment Manager"
 from .main import HierarchicalUV, main
 
 __all__ = ["HierarchicalUV", "main"]
+

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "huv"
-version = "0.2.0"
+version = "0.3.0"
 description = "Hierarchical UV Virtual Environment Manager"
 readme = "README.md"
 license = "MIT"

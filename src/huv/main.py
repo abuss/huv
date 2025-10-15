@@ -389,6 +389,85 @@ sys.path[:0] = new_paths
             return pkg_name.lower(), constraint
         return pkg_spec.lower(), ""
 
+    def _build_install_flags(self, parsed_args):
+        """Build install flags from parsed arguments"""
+        flags = []
+
+        # Constraints
+        if getattr(parsed_args, "constraints", None):
+            for constraint_file in parsed_args.constraints:
+                flags.extend(["-c", constraint_file])
+
+        # Editable installs (handled separately in package list)
+        if getattr(parsed_args, "editables", None):
+            for editable in parsed_args.editables:
+                flags.extend(["-e", editable])
+
+        # Extras
+        if getattr(parsed_args, "extras", None):
+            for extra in parsed_args.extras:
+                flags.extend(["--extra", extra])
+
+        if getattr(parsed_args, "all_extras", False):
+            flags.append("--all-extras")
+
+        # Upgrade options
+        if getattr(parsed_args, "upgrade", False):
+            flags.append("-U")
+
+        if getattr(parsed_args, "upgrade_packages", None):
+            for pkg in parsed_args.upgrade_packages:
+                flags.extend(["-P", pkg])
+
+        # Index options
+        if getattr(parsed_args, "index_url", None):
+            flags.extend(["-i", parsed_args.index_url])
+
+        if getattr(parsed_args, "extra_index_urls", None):
+            for url in parsed_args.extra_index_urls:
+                flags.extend(["--extra-index-url", url])
+
+        if getattr(parsed_args, "find_links", None):
+            for link in parsed_args.find_links:
+                flags.extend(["-f", link])
+
+        if getattr(parsed_args, "no_index", False):
+            flags.append("--no-index")
+
+        # Installation options
+        if getattr(parsed_args, "user", False):
+            flags.append("--user")
+
+        if getattr(parsed_args, "target", None):
+            flags.extend(["--target", parsed_args.target])
+
+        if getattr(parsed_args, "prefix", None):
+            flags.extend(["--prefix", parsed_args.prefix])
+
+        # Build options
+        if getattr(parsed_args, "no_deps", False):
+            flags.append("--no-deps")
+
+        if getattr(parsed_args, "no_build", False):
+            flags.append("--no-build")
+
+        if getattr(parsed_args, "no_binary", None):
+            for pkg in parsed_args.no_binary:
+                flags.extend(["--no-binary", pkg])
+
+        if getattr(parsed_args, "only_binary", None):
+            for pkg in parsed_args.only_binary:
+                flags.extend(["--only-binary", pkg])
+
+        # Other options
+        if getattr(parsed_args, "force_reinstall", False):
+            flags.append("--reinstall")
+
+        if getattr(parsed_args, "require_hashes", False):
+            flags.append("--require-hashes")
+
+        return flags
+
     def _is_version_compatible(self, available_version, constraint):
         """Check if available version satisfies the constraint"""
         if not constraint:
@@ -415,7 +494,7 @@ sys.path[:0] = new_paths
         # Default to compatible for complex constraints
         return True
 
-    def pip_install(self, packages, pip_args=None):
+    def pip_install(self, packages, pip_args=None, parsed_args=None):
         """Install packages with parent dependency checking"""
         if not self.current_venv:
             print(
@@ -424,9 +503,63 @@ sys.path[:0] = new_paths
             )
             sys.exit(1)
 
-        if not packages:
+        # Extract parsed arguments and build comprehensive package list
+        all_packages = list(packages) if packages else []
+        requirements_files = []
+        editables = []
+        install_flags = []
+
+        if parsed_args:
+            # Handle requirements files
+            if getattr(parsed_args, "requirements", None):
+                requirements_files = parsed_args.requirements
+
+            # Handle editable installs
+            if getattr(parsed_args, "editables", None):
+                editables = parsed_args.editables
+
+            # Build install flags from parsed arguments
+            install_flags = self._build_install_flags(parsed_args)
+        else:
+            # Fallback for old-style calls (backwards compatibility)
+            # For now, we'll handle requirements_files parameter as before
+            if hasattr(parsed_args, "__iter__") and not isinstance(parsed_args, str):
+                # If parsed_args is actually requirements_files list (old signature)
+                requirements_files = parsed_args or []
+
+        # Process requirements files
+        if requirements_files:
+            for req_file in requirements_files:
+                try:
+                    with open(req_file, "r") as f:
+                        for line in f:
+                            line = line.strip()
+                            # Skip empty lines and comments
+                            if line and not line.startswith("#"):
+                                all_packages.append(line)
+                except FileNotFoundError:
+                    print(
+                        f"Error: Requirements file '{req_file}' not found.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+                except Exception as e:
+                    print(
+                        f"Error reading requirements file '{req_file}': {e}",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+
+        # Add editable packages
+        if editables:
+            all_packages.extend(editables)
+
+        if not all_packages:
             print("Error: No packages specified for installation.", file=sys.stderr)
             sys.exit(1)
+
+        # Use all_packages instead of packages for the rest of the method
+        packages = all_packages
 
         # Get packages available from parents
         parent_packages = self._get_parent_packages(self.current_venv)
@@ -434,7 +567,44 @@ sys.path[:0] = new_paths
         print("🔍 Analyzing dependencies...")
 
         # Get full dependency tree using dry-run
-        dependency_tree = self._get_dependency_tree(packages, pip_args)
+        # Build dry-run command with appropriate flags
+        dry_run_args = []
+        if install_flags:
+            # Filter out flags that might interfere with dry-run analysis
+            safe_flags = []
+            skip_next = False
+            for i, flag in enumerate(install_flags):
+                if skip_next:
+                    skip_next = False
+                    continue
+
+                # Skip flags that don't work well with dry-run dependency analysis
+                if flag in ["--user", "--target", "--prefix", "--reinstall"]:
+                    continue
+                if flag in [
+                    "-c",
+                    "--constraints",
+                    "-f",
+                    "--find-links",
+                    "-i",
+                    "--index-url",
+                    "--extra-index-url",
+                ]:
+                    safe_flags.append(flag)
+                    # These flags take arguments, so skip the next item too
+                    if i + 1 < len(install_flags):
+                        safe_flags.append(install_flags[i + 1])
+                        skip_next = True
+                elif flag in ["--no-index", "--all-extras", "-U", "--upgrade"]:
+                    safe_flags.append(flag)
+                elif flag.startswith("--extra"):
+                    safe_flags.append(flag)
+                    if not flag.startswith("--extra=") and i + 1 < len(install_flags):
+                        safe_flags.append(install_flags[i + 1])
+                        skip_next = True
+            dry_run_args = safe_flags
+
+        dependency_tree = self._get_dependency_tree(packages, dry_run_args)
 
         if dependency_tree:
             print(
@@ -523,16 +693,24 @@ sys.path[:0] = new_paths
             )
 
         # Build uv pip install command
-        # We need to be careful about dependencies - if we detected them, we might want --no-deps
         cmd = [self.uv_executable, "pip", "install"]
 
-        if dependency_tree and skipped_packages:
+        # Add install flags from parsed arguments first
+        if install_flags:
+            cmd.extend(install_flags)
+
+        # Handle dependency conflicts
+        no_deps_from_args = "--no-deps" in install_flags
+        if dependency_tree and skipped_packages and not no_deps_from_args:
             # If we skipped some dependencies, we need to install without automatic dependency resolution
             # to avoid conflicts with parent packages
             cmd.append("--no-deps")
             print("🔧 Using --no-deps to avoid conflicts with parent environment")
 
+        # Add packages to install
         cmd.extend(packages_to_install)
+
+        # Add any additional pip args that weren't parsed
         if pip_args:
             cmd.extend(pip_args)
 
@@ -641,13 +819,214 @@ def main():
         if sys.argv[1] == "venv" and "--parent" in sys.argv:
             # Handle hierarchical venv creation
             parser = argparse.ArgumentParser(
-                description="Create hierarchical virtual environment"
+                description="Create hierarchical virtual environment",
+                formatter_class=argparse.RawDescriptionHelpFormatter,
+                epilog="All standard uv venv options are supported alongside --parent",
             )
             parser.add_argument("command")  # venv
             parser.add_argument("path", help="Path for the virtual environment")
+
+            # Hierarchical option (huv-specific)
             parser.add_argument("--parent", help="Parent virtual environment path")
+
+            # Core venv options
+            parser.add_argument(
+                "--no-project",
+                action="store_true",
+                help="Avoid discovering a project or workspace",
+            )
+            parser.add_argument(
+                "--seed",
+                action="store_true",
+                help="Install seed packages (pip, setuptools, wheel)",
+            )
+            parser.add_argument(
+                "-c",
+                "--clear",
+                action="store_true",
+                help="Remove existing files at target path",
+            )
+            parser.add_argument(
+                "--allow-existing",
+                action="store_true",
+                help="Preserve existing files at target path",
+            )
+            parser.add_argument(
+                "--prompt", help="Alternative prompt prefix for the virtual environment"
+            )
+            parser.add_argument(
+                "--system-site-packages",
+                action="store_true",
+                help="Give access to system site packages",
+            )
+            parser.add_argument(
+                "--relocatable",
+                action="store_true",
+                help="Make the virtual environment relocatable",
+            )
+
+            # Python options
+            parser.add_argument(
+                "-p",
+                "--python",
+                help="Python interpreter to use for the virtual environment",
+            )
+            parser.add_argument(
+                "--managed-python",
+                action="store_true",
+                help="Require use of uv-managed Python versions",
+            )
+            parser.add_argument(
+                "--no-managed-python",
+                action="store_true",
+                help="Disable use of uv-managed Python versions",
+            )
+            parser.add_argument(
+                "--no-python-downloads",
+                action="store_true",
+                help="Disable automatic downloads of Python",
+            )
+
+            # Index options
+            parser.add_argument(
+                "--index",
+                action="append",
+                help="URLs to use when resolving dependencies",
+            )
+            parser.add_argument(
+                "--default-index", help="URL of the default package index"
+            )
+            parser.add_argument(
+                "-i", "--index-url", help="URL of the Python package index (deprecated)"
+            )
+            parser.add_argument(
+                "--extra-index-url",
+                action="append",
+                help="Extra URLs of package indexes (deprecated)",
+            )
+            parser.add_argument(
+                "-f",
+                "--find-links",
+                action="append",
+                help="Locations to search for candidate distributions",
+            )
+            parser.add_argument(
+                "--no-index", action="store_true", help="Ignore the registry index"
+            )
+
+            # Performance and cache options
+            parser.add_argument(
+                "--index-strategy",
+                choices=["first-index", "unsafe-first-match", "unsafe-best-match"],
+                help="Strategy when resolving against multiple index URLs",
+            )
+            parser.add_argument(
+                "--keyring-provider",
+                choices=["disabled", "subprocess"],
+                help="Attempt to use keyring for authentication",
+            )
+            parser.add_argument(
+                "--exclude-newer",
+                help="Limit packages to those uploaded prior to given date",
+            )
+            parser.add_argument(
+                "--exclude-newer-package",
+                action="append",
+                help="Limit specific packages to older versions",
+            )
+            parser.add_argument(
+                "--link-mode",
+                choices=["clone", "copy", "hardlink", "symlink"],
+                help="Method to use when installing packages from global cache",
+            )
+            parser.add_argument(
+                "--refresh", action="store_true", help="Refresh all cached data"
+            )
+            parser.add_argument(
+                "-n",
+                "--no-cache",
+                action="store_true",
+                help="Avoid reading from or writing to cache",
+            )
+            parser.add_argument("--cache-dir", help="Path to the cache directory")
+            parser.add_argument(
+                "--refresh-package",
+                action="append",
+                help="Refresh cached data for specific packages",
+            )
+
             args, unknown_args = parser.parse_known_args()
-            huv.create_venv(args.path, args.parent, unknown_args)
+
+            # Build uv_args from parsed arguments
+            uv_args = []
+            if hasattr(args, "no_project") and args.no_project:
+                uv_args.append("--no-project")
+            if hasattr(args, "seed") and args.seed:
+                uv_args.append("--seed")
+            if hasattr(args, "clear") and args.clear:
+                uv_args.extend(["-c"])
+            if hasattr(args, "allow_existing") and args.allow_existing:
+                uv_args.append("--allow-existing")
+            if hasattr(args, "prompt") and args.prompt:
+                uv_args.extend(["--prompt", args.prompt])
+            if hasattr(args, "system_site_packages") and args.system_site_packages:
+                uv_args.append("--system-site-packages")
+            if hasattr(args, "relocatable") and args.relocatable:
+                uv_args.append("--relocatable")
+
+            # Python options
+            if hasattr(args, "python") and args.python:
+                uv_args.extend(["-p", args.python])
+            if hasattr(args, "managed_python") and args.managed_python:
+                uv_args.append("--managed-python")
+            if hasattr(args, "no_managed_python") and args.no_managed_python:
+                uv_args.append("--no-managed-python")
+            if hasattr(args, "no_python_downloads") and args.no_python_downloads:
+                uv_args.append("--no-python-downloads")
+
+            # Index options
+            if hasattr(args, "index") and args.index:
+                for idx in args.index:
+                    uv_args.extend(["--index", idx])
+            if hasattr(args, "default_index") and args.default_index:
+                uv_args.extend(["--default-index", args.default_index])
+            if hasattr(args, "index_url") and args.index_url:
+                uv_args.extend(["-i", args.index_url])
+            if hasattr(args, "extra_index_url") and args.extra_index_url:
+                for url in args.extra_index_url:
+                    uv_args.extend(["--extra-index-url", url])
+            if hasattr(args, "find_links") and args.find_links:
+                for link in args.find_links:
+                    uv_args.extend(["-f", link])
+            if hasattr(args, "no_index") and args.no_index:
+                uv_args.append("--no-index")
+
+            # Performance options
+            if hasattr(args, "index_strategy") and args.index_strategy:
+                uv_args.extend(["--index-strategy", args.index_strategy])
+            if hasattr(args, "keyring_provider") and args.keyring_provider:
+                uv_args.extend(["--keyring-provider", args.keyring_provider])
+            if hasattr(args, "exclude_newer") and args.exclude_newer:
+                uv_args.extend(["--exclude-newer", args.exclude_newer])
+            if hasattr(args, "exclude_newer_package") and args.exclude_newer_package:
+                for pkg in args.exclude_newer_package:
+                    uv_args.extend(["--exclude-newer-package", pkg])
+            if hasattr(args, "link_mode") and args.link_mode:
+                uv_args.extend(["--link-mode", args.link_mode])
+            if hasattr(args, "refresh") and args.refresh:
+                uv_args.append("--refresh")
+            if hasattr(args, "no_cache") and args.no_cache:
+                uv_args.append("-n")
+            if hasattr(args, "cache_dir") and args.cache_dir:
+                uv_args.extend(["--cache-dir", args.cache_dir])
+            if hasattr(args, "refresh_package") and args.refresh_package:
+                for pkg in args.refresh_package:
+                    uv_args.extend(["--refresh-package", pkg])
+
+            # Add any unknown args
+            uv_args.extend(unknown_args)
+
+            huv.create_venv(args.path, args.parent, uv_args)
             return
 
         elif (
@@ -662,9 +1041,137 @@ def main():
                 )
                 parser.add_argument("command")  # pip
                 parser.add_argument("subcommand")  # install
-                parser.add_argument("packages", nargs="+", help="Packages to install")
+                parser.add_argument("packages", nargs="*", help="Packages to install")
+
+                # Requirements and constraints
+                parser.add_argument(
+                    "-r",
+                    "--requirement",
+                    dest="requirements",
+                    action="append",
+                    help="Requirements files",
+                )
+                parser.add_argument(
+                    "-c",
+                    "--constraints",
+                    dest="constraints",
+                    action="append",
+                    help="Constraint files",
+                )
+
+                # Editable installs
+                parser.add_argument(
+                    "-e",
+                    "--editable",
+                    dest="editables",
+                    action="append",
+                    help="Editable packages",
+                )
+
+                # Extras
+                parser.add_argument(
+                    "--extra",
+                    dest="extras",
+                    action="append",
+                    help="Include optional dependencies",
+                )
+                parser.add_argument(
+                    "--all-extras",
+                    action="store_true",
+                    help="Include all optional dependencies",
+                )
+
+                # Upgrade options
+                parser.add_argument(
+                    "-U",
+                    "--upgrade",
+                    action="store_true",
+                    help="Allow package upgrades",
+                )
+                parser.add_argument(
+                    "-P",
+                    "--upgrade-package",
+                    dest="upgrade_packages",
+                    action="append",
+                    help="Allow upgrades for specific packages",
+                )
+
+                # Index options
+                parser.add_argument(
+                    "-i",
+                    "--index-url",
+                    dest="index_url",
+                    help="Base URL of Python Package Index",
+                )
+                parser.add_argument(
+                    "--extra-index-url",
+                    dest="extra_index_urls",
+                    action="append",
+                    help="Extra URLs of package indexes",
+                )
+                parser.add_argument(
+                    "-f",
+                    "--find-links",
+                    dest="find_links",
+                    action="append",
+                    help="Look for archives at this URL or path",
+                )
+                parser.add_argument(
+                    "--no-index", action="store_true", help="Ignore package index"
+                )
+
+                # Installation options
+                parser.add_argument(
+                    "--user", action="store_true", help="Install to user directory"
+                )
+                parser.add_argument(
+                    "--target",
+                    dest="target",
+                    help="Install packages into specified directory",
+                )
+                parser.add_argument(
+                    "--prefix", dest="prefix", help="Installation prefix"
+                )
+
+                # Build options
+                parser.add_argument(
+                    "--no-deps",
+                    action="store_true",
+                    help="Don't install package dependencies",
+                )
+                parser.add_argument(
+                    "--no-build",
+                    action="store_true",
+                    help="Don't build source distributions",
+                )
+                parser.add_argument(
+                    "--no-binary",
+                    dest="no_binary",
+                    action="append",
+                    help="Don't use pre-built wheels",
+                )
+                parser.add_argument(
+                    "--only-binary",
+                    dest="only_binary",
+                    action="append",
+                    help="Only use pre-built wheels",
+                )
+
+                # Other common options
+                parser.add_argument(
+                    "--force-reinstall",
+                    "--reinstall",
+                    action="store_true",
+                    help="Reinstall all packages",
+                )
+                parser.add_argument(
+                    "--require-hashes",
+                    action="store_true",
+                    help="Require a matching hash for each requirement",
+                )
+
                 args, unknown_args = parser.parse_known_args()
-                huv.pip_install(args.packages, unknown_args)
+                huv.pip_install(args.packages, unknown_args, args)
                 return
 
             elif sys.argv[2] == "uninstall":
