@@ -24,8 +24,26 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ## 🚀 Installation
 
+### Option 1: Install via pip (Recommended)
 ```bash
 pip install huv
+```
+
+### Option 2: Run standalone executable
+```bash
+# Download the standalone executable
+curl -LsSf https://github.com/your-org/huv/releases/latest/download/huv -o huv
+chmod +x huv
+
+# Move to a directory in your PATH (optional)
+mv huv /usr/local/bin/
+```
+
+### Option 3: Install from source
+```bash
+git clone https://github.com/your-org/huv.git
+cd huv
+pip install .
 ```
 
 ## 📖 Quick Start
@@ -354,6 +372,23 @@ huv venv myproject --parent .tools       # + project-specific packages
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
+
+### Project Structure
+
+huv is designed as a single standalone executable for maximum portability:
+
+```
+huv                    # Main executable (Python script)
+├── README.md         # Documentation
+├── LICENSE           # MIT License
+└── pyproject.toml    # Build configuration
+```
+
+The `huv` file contains the complete application and can be run directly without installation. This design makes it easy to:
+- Distribute as a single file
+- Run without complex dependencies
+- Integrate into existing workflows
+- Deploy in containerized environments
 
 ## 📄 License
 

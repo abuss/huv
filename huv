@@ -16,6 +16,8 @@ Usage:
     huv pip install <packages...>
     huv pip uninstall <packages...>
     huv --help
+
+Version: 0.3.0
 """
 
 import argparse

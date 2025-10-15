@@ -54,20 +54,19 @@ Repository = "https://github.com/your-org/huv.git"
 "Bug Tracker" = "https://github.com/your-org/huv/issues"
 
 [project.scripts]
-huv = "huv.main:main"
-
-[tool.hatch.version]
-path = "src/huv/__init__.py"
+huv = "huv:main"
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "src/huv",
+    "huv",
     "README.md",
     "LICENSE",
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/huv"]
+include = [
+    "huv",
+]
 
 [tool.black]
 target-version = ['py38']
