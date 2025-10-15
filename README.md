@@ -304,6 +304,47 @@ huv pip install --no-build package1     # Don't build sources
 huv pip install --require-hashes -r requirements.txt
 ```
 
+## 🔧 Environment Management
+
+### Python Version Consistency
+
+huv automatically ensures Python version consistency in hierarchical environments:
+
+```bash
+# Create parent with Python 3.11
+huv venv .parent --python 3.11
+
+# Child automatically inherits Python 3.11
+huv venv child --parent .parent  # Uses Python 3.11 automatically
+
+# Error if trying to use different version
+huv venv child --parent .parent --python 3.10  # ❌ Error: Version mismatch
+```
+
+### Environment Information
+
+```bash
+# Check environment hierarchy
+cat child/pyvenv.cfg | grep huv_parent
+# Output: huv_parent = /path/to/.parent
+
+# Verify package inheritance
+source child/bin/activate
+python -c "import sys; print(sys.path)"  # Shows parent paths
+```
+
+### Cleanup and Management
+
+```bash
+# Remove environments (children first)
+rm -rf child/
+rm -rf .parent/
+
+# Check what packages come from where
+huv pip list  # Shows local packages only
+pip list      # Shows all packages (including inherited)
+```
+
 ## 🛠️ Advanced Usage
 
 ### Advanced Installation Options
@@ -369,6 +410,63 @@ huv venv .tools --parent .deps           # + development tools
 huv venv myproject --parent .tools       # + project-specific packages
 ```
 
+## 🐛 Troubleshooting
+
+### Common Issues
+
+#### Environment Creation Fails
+```bash
+# Error: Path already exists
+rm -rf existing-path && huv venv existing-path
+
+# Error: Parent environment not found
+huv venv child --parent /path/to/missing  # Check parent path
+```
+
+#### Package Installation Issues
+```bash
+# Force installation if dependency analysis fails
+huv pip install --no-deps package-name
+
+# Clear cache if having dependency resolution issues
+uv cache clean
+
+# Check what packages are inherited
+source child/bin/activate
+python -c "import package; print(package.__file__)"  # Shows source location
+```
+
+#### Python Version Issues
+```bash
+# Check parent Python version
+python parent-env/bin/python --version
+
+# Create child with explicit version matching parent
+huv venv child --parent parent-env --python 3.11
+```
+
+### Performance Tips
+
+- Use `--link-mode hardlink` for fastest environment creation
+- Share a base environment across multiple projects to save disk space
+- Use `--no-deps` for packages when you know dependencies are satisfied by parents
+- Keep environment hierarchies shallow (2-3 levels max) for best performance
+
+### Debugging
+
+```bash
+# Enable verbose output for uv operations
+export UV_VERBOSE=1
+huv pip install package-name
+
+# Check inheritance chain
+huv venv child --parent .parent --verbose  # If supported
+
+# Manual inspection of environment
+cat child/pyvenv.cfg
+cat child/bin/activate  # Check PYTHONPATH modifications
+```
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
@@ -389,6 +487,51 @@ The `huv` file contains the complete application and can be run directly without
 - Run without complex dependencies
 - Integrate into existing workflows
 - Deploy in containerized environments
+
+### Development Setup
+
+```bash
+# Clone and setup development environment
+git clone https://github.com/your-org/huv.git
+cd huv
+
+# Run tests
+./run_tests.sh
+
+# Or run specific tests
+python tests/test_huv.py
+
+# Test manually
+./huv venv test-env
+./huv venv test-child --parent test-env
+```
+
+### Running Tests
+
+The project includes comprehensive tests:
+
+```bash
+# Run all tests (unit + integration)
+./run_tests.sh
+
+# Run only unit tests
+python tests/test_huv.py
+
+# Run with Python's unittest
+python -m unittest tests.test_huv
+
+# Run specific test
+python tests/test_huv.py TestHuv.test_create_hierarchical_venv
+```
+
+### Code Quality
+
+The project maintains high code quality standards:
+
+- Comprehensive test coverage (15+ test cases)
+- GitHub Actions CI/CD for multi-platform testing
+- Support for Python 3.8+ across Linux, macOS, and Windows
+- Automated testing on every commit
 
 ## 📄 License
 
