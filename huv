@@ -27,7 +27,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Union, Dict, Any
+from typing import Dict, List, Union
 
 
 class HierarchicalUV:
@@ -252,17 +252,24 @@ class HierarchicalUV:
             parent_path (str or Path): Path to the parent virtual environment.
 
         Behavior:
-            - Modifies the bash activation script to include logic for the parent environment.
+            - Modifies activation scripts for all shells to include parent environment logic.
             - Modifies the Python 'activate_this.py' script for hierarchical activation.
 
         """
         self._modify_bash_activate(venv_path, parent_path)
+        self._modify_fish_activate(venv_path, parent_path)
+        self._modify_csh_activate(venv_path, parent_path)
+        self._modify_powershell_activate(venv_path, parent_path)
+        self._modify_nushell_activate(venv_path, parent_path)
+        self._modify_batch_activate(venv_path, parent_path)
         self._modify_activate_this_py(venv_path, parent_path)
 
     def _modify_bash_activate(
         self, venv_path: Union[str, Path], parent_path: Union[str, Path]
     ) -> None:
         """Modify the bash activate script"""
+        venv_path = Path(venv_path)
+        parent_path = Path(parent_path)
         activate_script = venv_path / "bin" / "activate"
 
         if not activate_script.exists():
@@ -332,10 +339,294 @@ fi
         with open(activate_script, "w") as f:
             f.write(content)
 
+    def _modify_fish_activate(
+        self, venv_path: Union[str, Path], parent_path: Union[str, Path]
+    ) -> None:
+        """Modify the Fish activate script"""
+        venv_path = Path(venv_path)
+        parent_path = Path(parent_path)
+        activate_script = venv_path / "bin" / "activate.fish"
+
+        if not activate_script.exists():
+            print(f"Warning: Fish activate script not found at {activate_script}")
+            return
+
+        # Read the original script
+        with open(activate_script) as f:
+            content = f.read()
+
+        # Add hierarchy support for Fish shell
+        hierarchy_code = f'''
+# Hierarchical environment support - include parent libraries
+set PARENT_VENV_PATH "{parent_path}"
+if test -d "$PARENT_VENV_PATH"
+    # Store old PYTHONPATH
+    if set -q PYTHONPATH
+        set -gx _OLD_VIRTUAL_PYTHONPATH $PYTHONPATH
+    end
+
+    # Add parent site-packages to PYTHONPATH (appended, so child takes precedence)
+    for parent_site in "$PARENT_VENV_PATH"/lib/python*/site-packages
+        if test -d "$parent_site"
+            if not set -q PYTHONPATH
+                set -gx PYTHONPATH "$parent_site"
+            else
+                set -gx PYTHONPATH "$PYTHONPATH:$parent_site"
+            end
+        end
+    end
+end
+
+'''
+
+        # Insert before the final function end
+        content = content.replace("end\n", hierarchy_code + "end\n")
+
+        # Add PYTHONPATH restoration to deactivate function
+        deactivate_section = """    if set -q _OLD_VIRTUAL_PYTHONPATH
+        set -gx PYTHONPATH $_OLD_VIRTUAL_PYTHONPATH
+        set -e _OLD_VIRTUAL_PYTHONPATH
+    else
+        set -e PYTHONPATH
+    end"""
+
+        # Find and modify the deactivate function
+        if "set -e VIRTUAL_ENV" in content:
+            content = content.replace(
+                "set -e VIRTUAL_ENV", deactivate_section + "\n    set -e VIRTUAL_ENV"
+            )
+
+        # Write the modified script
+        with open(activate_script, "w") as f:
+            f.write(content)
+
+    def _modify_csh_activate(
+        self, venv_path: Union[str, Path], parent_path: Union[str, Path]
+    ) -> None:
+        """Modify the C shell activate script"""
+        venv_path = Path(venv_path)
+        parent_path = Path(parent_path)
+        activate_script = venv_path / "bin" / "activate.csh"
+
+        if not activate_script.exists():
+            print(f"Warning: C shell activate script not found at {activate_script}")
+            return
+
+        # Read the original script
+        with open(activate_script) as f:
+            content = f.read()
+
+        # Add hierarchy support for C shell
+        hierarchy_code = f'''
+# Hierarchical environment support - include parent libraries
+set PARENT_VENV_PATH = "{parent_path}"
+if ( -d "$PARENT_VENV_PATH" ) then
+    # Store old PYTHONPATH
+    if ( $?PYTHONPATH ) then
+        setenv _OLD_VIRTUAL_PYTHONPATH "$PYTHONPATH"
+    endif
+
+    # Add parent site-packages to PYTHONPATH (appended, so child takes precedence)
+    foreach parent_site ( "$PARENT_VENV_PATH"/lib/python*/site-packages )
+        if ( -d "$parent_site" ) then
+            if ( ! $?PYTHONPATH ) then
+                setenv PYTHONPATH "$parent_site"
+            else
+                setenv PYTHONPATH "$PYTHONPATH:$parent_site"
+            endif
+        endif
+    end
+endif
+
+'''
+
+        # Insert at the end of the script
+        content = content + hierarchy_code
+
+        # Add PYTHONPATH restoration to deactivate alias
+        deactivate_addition = """
+    if ( $?_OLD_VIRTUAL_PYTHONPATH ) then
+        setenv PYTHONPATH "$_OLD_VIRTUAL_PYTHONPATH"
+        unsetenv _OLD_VIRTUAL_PYTHONPATH
+    else
+        if ( $?PYTHONPATH ) then
+            unsetenv PYTHONPATH
+        endif
+    endif"""
+
+        # Find and modify the deactivate section
+        if "unsetenv VIRTUAL_ENV" in content:
+            content = content.replace(
+                "unsetenv VIRTUAL_ENV",
+                deactivate_addition + "\n    unsetenv VIRTUAL_ENV",
+            )
+
+        # Write the modified script
+        with open(activate_script, "w") as f:
+            f.write(content)
+
+    def _modify_powershell_activate(
+        self, venv_path: Union[str, Path], parent_path: Union[str, Path]
+    ) -> None:
+        """Modify the PowerShell activate script"""
+        venv_path = Path(venv_path)
+        parent_path = Path(parent_path)
+        activate_script = venv_path / "bin" / "activate.ps1"
+
+        if not activate_script.exists():
+            print(f"Warning: PowerShell activate script not found at {activate_script}")
+            return
+
+        # Read the original script
+        with open(activate_script) as f:
+            content = f.read()
+
+        # Add hierarchy support for PowerShell
+        hierarchy_code = f'''
+# Hierarchical environment support - include parent libraries
+$PARENT_VENV_PATH = "{parent_path}"
+if (Test-Path $PARENT_VENV_PATH) {{
+    # Store old PYTHONPATH
+    if ($env:PYTHONPATH) {{
+        $global:_OLD_VIRTUAL_PYTHONPATH = $env:PYTHONPATH
+    }}
+
+    # Add parent site-packages to PYTHONPATH (appended, so child takes precedence)
+    $parentSites = Get-ChildItem "$PARENT_VENV_PATH/lib/python*/site-packages" -Directory 2>$null
+    foreach ($parentSite in $parentSites) {{
+        if (!$env:PYTHONPATH) {{
+            $env:PYTHONPATH = $parentSite.FullName
+        }} else {{
+            $env:PYTHONPATH = "$env:PYTHONPATH;" + $parentSite.FullName
+        }}
+    }}
+}}
+
+'''
+
+        # Insert at the end of the script
+        content = content + hierarchy_code
+
+        # Add PYTHONPATH restoration to deactivate function
+        deactivate_addition = """    if (Test-Path variable:global:_OLD_VIRTUAL_PYTHONPATH) {
+        $env:PYTHONPATH = $global:_OLD_VIRTUAL_PYTHONPATH
+        Remove-Variable "_OLD_VIRTUAL_PYTHONPATH" -Scope global
+    } else {
+        Remove-Item env:PYTHONPATH -ErrorAction SilentlyContinue
+    }
+
+"""
+
+        # Find and modify the deactivate function
+        if "Remove-Item env:VIRTUAL_ENV -ErrorAction SilentlyContinue" in content:
+            content = content.replace(
+                "Remove-Item env:VIRTUAL_ENV -ErrorAction SilentlyContinue",
+                deactivate_addition
+                + "    Remove-Item env:VIRTUAL_ENV -ErrorAction SilentlyContinue",
+            )
+
+        # Write the modified script
+        with open(activate_script, "w") as f:
+            f.write(content)
+
+    def _modify_nushell_activate(
+        self, venv_path: Union[str, Path], parent_path: Union[str, Path]
+    ) -> None:
+        """Modify the Nushell activate script"""
+        venv_path = Path(venv_path)
+        parent_path = Path(parent_path)
+        activate_script = venv_path / "bin" / "activate.nu"
+
+        if not activate_script.exists():
+            # Nushell is optional, so don't warn if missing
+            return
+
+        # Read the original script
+        with open(activate_script) as f:
+            content = f.read()
+
+        # Add hierarchy support for Nushell - this is complex due to Nushell's structure
+        # For now, we'll add a simple PYTHONPATH modification
+        hierarchy_code = f'''
+    # Hierarchical environment support - include parent libraries
+    let parent_venv_path = "{parent_path}"
+    if ($parent_venv_path | path exists) {{
+        let parent_sites = (glob ($parent_venv_path + "/lib/python*/site-packages"))
+        if ($parent_sites | length) > 0 {{
+            let current_pythonpath = if ($env | has-env PYTHONPATH) {{ $env.PYTHONPATH }} else {{ "" }}
+            let new_pythonpath = if ($current_pythonpath | is-empty) {{
+                ($parent_sites | str join ":")
+            }} else {{
+                ($current_pythonpath + ":" + ($parent_sites | str join ":"))
+            }}
+            $new_env = ($new_env | merge {{ PYTHONPATH: $new_pythonpath }})
+        }}
+    }}
+'''
+
+        # Insert before load-env call
+        if "load-env $new_env" in content:
+            content = content.replace(
+                "load-env $new_env", hierarchy_code + "    load-env $new_env"
+            )
+
+        # Write the modified script
+        with open(activate_script, "w") as f:
+            f.write(content)
+
+    def _modify_batch_activate(
+        self, venv_path: Union[str, Path], parent_path: Union[str, Path]
+    ) -> None:
+        """Modify the Windows batch activate script"""
+        venv_path = Path(venv_path)
+        parent_path = Path(parent_path)
+        activate_script = venv_path / "bin" / "activate.bat"
+
+        if not activate_script.exists():
+            # Batch is Windows-specific, so don't warn if missing on Unix
+            return
+
+        # Read the original script
+        with open(activate_script) as f:
+            content = f.read()
+
+        # Add hierarchy support for batch - Windows uses semicolon as path separator
+        hierarchy_code = f"""
+@REM Hierarchical environment support - include parent libraries
+@set "PARENT_VENV_PATH={parent_path}"
+@if exist "%PARENT_VENV_PATH%" (
+    @REM Store old PYTHONPATH
+    @if defined PYTHONPATH (
+        @set "_OLD_VIRTUAL_PYTHONPATH=%PYTHONPATH%"
+    )
+
+    @REM Add parent site-packages to PYTHONPATH
+    @for /d %%i in ("%PARENT_VENV_PATH%\\lib\\python*") do (
+        @if exist "%%i\\site-packages" (
+            @if not defined PYTHONPATH (
+                @set "PYTHONPATH=%%i\\site-packages"
+            ) else (
+                @set "PYTHONPATH=%PYTHONPATH%;%%i\\site-packages"
+            )
+        )
+    )
+)
+
+"""
+
+        # Insert at the end of the script
+        content = content + hierarchy_code
+
+        # Write the modified script
+        with open(activate_script, "w") as f:
+            f.write(content)
+
     def _modify_activate_this_py(
         self, venv_path: Union[str, Path], parent_path: Union[str, Path]
     ) -> None:
         """Modify the activate_this.py script"""
+        venv_path = Path(venv_path)
+        parent_path = Path(parent_path)
         activate_this = venv_path / "bin" / "activate_this.py"
 
         if not activate_this.exists():
