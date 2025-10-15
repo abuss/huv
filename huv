@@ -27,15 +27,37 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import List, Union, Dict, Any
 
 
 class HierarchicalUV:
-    def __init__(self):
+    """
+    Main class for managing hierarchical virtual environments with uv.
+
+    This class provides functionality to create and manage virtual environments
+    that can inherit packages from parent environments, enabling efficient
+    storage and dependency management across related projects.
+
+    Attributes:
+        uv_executable (str): Path to the uv executable
+        current_venv (str|None): Path to currently active virtual environment
+    """
+
+    def __init__(self) -> None:
+        """Initialize the HierarchicalUV manager."""
         self.uv_executable = self._find_uv()
         self.current_venv = self._get_current_venv()
 
-    def _find_uv(self):
-        """Find the uv executable in PATH"""
+    def _find_uv(self) -> str:
+        """
+        Find the uv executable in the system PATH.
+
+        Returns:
+            str: Path to the uv executable
+
+        Raises:
+            SystemExit: If uv is not found in PATH
+        """
         import shutil
 
         uv_path = shutil.which("uv")
@@ -51,8 +73,16 @@ class HierarchicalUV:
             sys.exit(1)
         return uv_path
 
-    def _get_python_version(self, venv_path):
-        """Extract Python version from pyvenv.cfg file"""
+    def _get_python_version(self, venv_path: Union[str, Path]) -> str | None:
+        """
+        Extract Python version from a virtual environment's pyvenv.cfg file.
+
+        Args:
+            venv_path (str|Path): Path to the virtual environment
+
+        Returns:
+            str|None: Python version (e.g., "3.11") or None if not found
+        """
         pyvenv_cfg = Path(venv_path) / "pyvenv.cfg"
         if not pyvenv_cfg.exists():
             return None
@@ -71,24 +101,40 @@ class HierarchicalUV:
 
         return None
 
-    def create_venv(self, venv_path, parent_path=None, uv_args=None):
-        """Create a virtual environment with optional parent hierarchy"""
+    def create_venv(
+        self,
+        venv_path: Union[str, Path],
+        parent_path: Union[str, Path] | None = None,
+        uv_args: List[str] | None = None,
+    ) -> None:
+        """
+        Create a Python virtual environment at the specified path, optionally establishing
+        a parent-child hierarchy with another virtual environment.
+
+        Args:
+            venv_path (str or Path): The target directory for the new virtual environment.
+            parent_path (str or Path, optional): Path to the parent virtual environment, if any.
+            uv_args (list, optional): Additional arguments to pass to the 'uv venv' command.
+
+        Behavior:
+            - Checks if the target directory exists and is suitable for venv creation.
+            - Validates the parent environment (if specified) for existence, structure, and Python version compatibility.
+            - Ensures the child environment uses the same Python version as the parent, unless overridden.
+            - Invokes the 'uv venv' command to create the environment.
+            - Verifies successful creation by checking for the activate script.
+            - If a parent is specified, sets up the hierarchy by modifying activation scripts.
+            - Prints informative messages and errors to the user.
+            - Exits with error status on failure.
+        """
         venv_path = Path(venv_path).resolve()
 
         # Check if target already exists
         if venv_path.exists():
-            if (venv_path / "pyvenv.cfg").exists():
-                print(
-                    f"Error: Virtual environment already exists at '{venv_path}'",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-            elif any(venv_path.iterdir()):
-                print(
-                    f"Error: Directory '{venv_path}' exists and is not empty",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
+            print(
+                f"Error: Path '{venv_path}' already exists",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
         # Validate parent environment if specified
         if parent_path:
@@ -120,7 +166,7 @@ class HierarchicalUV:
                 python_specified = False
                 if uv_args:
                     for i, arg in enumerate(uv_args):
-                        if arg == "--python" and i + 1 < len(uv_args):
+                        if (arg == "--python" or arg == "-p") and i + 1 < len(uv_args):
                             python_specified = True
                             python_arg = uv_args[i + 1]
                             # Extract version from python executable path or version string
@@ -147,6 +193,12 @@ class HierarchicalUV:
                     if uv_args is None:
                         uv_args = []
                     uv_args.extend(["--python", parent_python_version])
+                    print(f"Using parent's Python version: {parent_python_version}")
+                elif (
+                    python_specified
+                    and requested_python_version == parent_python_version
+                ):
+                    # User explicitly specified same version as parent - no need to add another --python
                     print(f"Using parent's Python version: {parent_python_version}")
 
         # Build uv command
@@ -190,12 +242,26 @@ class HierarchicalUV:
             print(f"✓ Hierarchy configured with parent: {parent_path}")
             print(f"  Use: source {venv_path}/bin/activate")
 
-    def _setup_hierarchy(self, venv_path, parent_path):
-        """Modify activation scripts to support hierarchy"""
+    def _setup_hierarchy(
+        self, venv_path: Union[str, Path], parent_path: Union[str, Path]
+    ) -> None:
+        """Modify activation scripts to support hierarchy
+
+        Args:
+            venv_path (str or Path): Path to the child virtual environment.
+            parent_path (str or Path): Path to the parent virtual environment.
+
+        Behavior:
+            - Modifies the bash activation script to include logic for the parent environment.
+            - Modifies the Python 'activate_this.py' script for hierarchical activation.
+
+        """
         self._modify_bash_activate(venv_path, parent_path)
         self._modify_activate_this_py(venv_path, parent_path)
 
-    def _modify_bash_activate(self, venv_path, parent_path):
+    def _modify_bash_activate(
+        self, venv_path: Union[str, Path], parent_path: Union[str, Path]
+    ) -> None:
         """Modify the bash activate script"""
         activate_script = venv_path / "bin" / "activate"
 
@@ -266,7 +332,9 @@ fi
         with open(activate_script, "w") as f:
             f.write(content)
 
-    def _modify_activate_this_py(self, venv_path, parent_path):
+    def _modify_activate_this_py(
+        self, venv_path: Union[str, Path], parent_path: Union[str, Path]
+    ) -> None:
         """Modify the activate_this.py script"""
         activate_this = venv_path / "bin" / "activate_this.py"
 
@@ -315,15 +383,31 @@ sys.path[:0] = new_paths
         with open(activate_this, "w") as f:
             f.write(content)
 
-    def _get_current_venv(self):
-        """Get the current virtual environment path"""
+    def _get_current_venv(self) -> Path | None:
+        """
+        Get the path of the currently active virtual environment.
+
+        Returns:
+            Path|None: Path to current virtual environment or None if not in one
+        """
         venv_path = os.environ.get("VIRTUAL_ENV")
         if venv_path:
             return Path(venv_path)
         return None
 
-    def _find_parent_venv(self, venv_path):
-        """Find the parent virtual environment for a given venv"""
+    def _find_parent_venv(self, venv_path: Path | None) -> Path | None:
+        """
+        Find the parent virtual environment for a given virtual environment.
+
+        This method looks for the huv_parent configuration in pyvenv.cfg
+        to determine if the environment has a hierarchical parent.
+
+        Args:
+            venv_path (Path|None): Path to the virtual environment to check
+
+        Returns:
+            Path|None: Path to parent environment or None if no parent exists
+        """
         if not venv_path:
             return None
 
@@ -344,8 +428,16 @@ sys.path[:0] = new_paths
             pass
         return None
 
-    def _get_installed_packages(self, venv_path):
-        """Get installed packages in a virtual environment"""
+    def _get_installed_packages(self, venv_path: Path | None) -> Dict[str, str]:
+        """
+        Get a dictionary of installed packages in a virtual environment.
+
+        Args:
+            venv_path (Path): Path to the virtual environment
+
+        Returns:
+            dict: Mapping of package names to versions, e.g., {"numpy": "1.24.0"}
+        """
         if not venv_path or not venv_path.exists():
             return {}
 
@@ -376,7 +468,7 @@ sys.path[:0] = new_paths
 
         return {}
 
-    def _get_parent_packages(self, venv_path):
+    def _get_parent_packages(self, venv_path: Path | None) -> Dict[str, str]:
         """Get all packages available from parent environments"""
         all_packages = {}
         current = venv_path
@@ -396,7 +488,9 @@ sys.path[:0] = new_paths
 
         return all_packages
 
-    def _get_dependency_tree(self, packages, pip_args=None):
+    def _get_dependency_tree(
+        self, packages: List[str], pip_args: List[str] | None = None
+    ) -> Dict[str, str]:
         """Get the full dependency tree for packages using dry-run"""
         cmd = [self.uv_executable, "pip", "install", "--dry-run"] + packages
         if pip_args:
@@ -432,7 +526,7 @@ sys.path[:0] = new_paths
             # If dry-run fails, fall back to the original approach
             return {}
 
-    def _parse_version_constraint(self, pkg_spec):
+    def _parse_version_constraint(self, pkg_spec: str) -> tuple[str, str]:
         """Parse package specification to extract name and version constraint"""
         # Handle specifications like "numpy>=1.0", "requests==2.0", etc.
         match = re.match(r"^([a-zA-Z0-9_.-]+)(.*)$", pkg_spec.strip())
@@ -442,7 +536,7 @@ sys.path[:0] = new_paths
             return pkg_name.lower(), constraint
         return pkg_spec.lower(), ""
 
-    def _build_install_flags(self, parsed_args):
+    def _build_install_flags(self, parsed_args: argparse.Namespace) -> List[str]:
         """Build install flags from parsed arguments"""
         flags = []
 
@@ -521,7 +615,7 @@ sys.path[:0] = new_paths
 
         return flags
 
-    def _is_version_compatible(self, available_version, constraint):
+    def _is_version_compatible(self, available_version: str, constraint: str) -> bool:
         """Check if available version satisfies the constraint"""
         if not constraint:
             return True
@@ -547,8 +641,27 @@ sys.path[:0] = new_paths
         # Default to compatible for complex constraints
         return True
 
-    def pip_install(self, packages, pip_args=None, parsed_args=None):
-        """Install packages with parent dependency checking"""
+    def pip_install(
+        self,
+        packages: List[str],
+        pip_args: List[str] | None = None,
+        parsed_args: argparse.Namespace | None = None,
+    ) -> None:
+        """
+        Install packages with hierarchical dependency checking.
+
+        This method analyzes package dependencies and only installs packages
+        that are not already available from parent environments, significantly
+        reducing disk usage and installation time.
+
+        Args:
+            packages (list): List of package specifications to install
+            pip_args (list, optional): Additional pip arguments (deprecated)
+            parsed_args (Namespace, optional): Parsed command line arguments
+
+        Raises:
+            SystemExit: If no virtual environment is active or installation fails
+        """
         if not self.current_venv:
             print(
                 "Error: No active virtual environment. Please activate one first.",
@@ -783,8 +896,23 @@ sys.path[:0] = new_paths
             )
             sys.exit(e.returncode)
 
-    def pip_uninstall(self, packages, pip_args=None):
-        """Uninstall packages from current environment"""
+    def pip_uninstall(
+        self, packages: List[str], pip_args: List[str] | None = None
+    ) -> None:
+        """
+        Uninstall packages from the current environment with hierarchy awareness.
+
+        This method uninstalls packages from the current environment while
+        providing information about which packages remain available from
+        parent environments.
+
+        Args:
+            packages (list): List of package names to uninstall
+            pip_args (list, optional): Additional pip arguments
+
+        Raises:
+            SystemExit: If no virtual environment is active or uninstallation fails
+        """
         if not self.current_venv:
             print(
                 "Error: No active virtual environment. Please activate one first.",
@@ -851,8 +979,19 @@ sys.path[:0] = new_paths
             )
             sys.exit(e.returncode)
 
-    def passthrough_command(self, args):
-        """Pass through commands directly to uv"""
+    def passthrough_command(self, args: List[str]) -> None:
+        """
+        Pass commands directly to uv without modification.
+
+        This method is used for commands that don't require hierarchical
+        processing, such as cache management, tool installs, etc.
+
+        Args:
+            args (list): Command arguments to pass to uv
+
+        Raises:
+            SystemExit: If uv execution fails
+        """
         cmd = [self.uv_executable] + args
 
         try:
@@ -864,15 +1003,28 @@ sys.path[:0] = new_paths
             sys.exit(1)
 
 
-def main():
+def main() -> None:
+    """
+    Main entry point for the huv command-line interface.
+
+    This function handles command-line argument parsing and dispatches
+    to the appropriate HierarchicalUV methods based on the command type.
+
+    Commands handled specially:
+    - venv: Virtual environment creation with optional hierarchy
+    - pip install: Package installation with dependency analysis
+    - pip uninstall: Package removal with hierarchy awareness
+
+    All other commands are passed through directly to uv.
+    """
     huv = HierarchicalUV()
 
     # Check if this is a huv-specific command that needs special handling
     if len(sys.argv) >= 2:
-        if sys.argv[1] == "venv" and "--parent" in sys.argv:
-            # Handle hierarchical venv creation
+        if sys.argv[1] == "venv":
+            # Handle all venv creation through our create_venv method
             parser = argparse.ArgumentParser(
-                description="Create hierarchical virtual environment",
+                description="Create virtual environment (with optional hierarchy)",
                 formatter_class=argparse.RawDescriptionHelpFormatter,
                 epilog="All standard uv venv options are supported alongside --parent",
             )
@@ -1249,4 +1401,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
