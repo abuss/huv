@@ -51,6 +51,26 @@ class HierarchicalUV:
             sys.exit(1)
         return uv_path
 
+    def _get_python_version(self, venv_path):
+        """Extract Python version from pyvenv.cfg file"""
+        pyvenv_cfg = Path(venv_path) / "pyvenv.cfg"
+        if not pyvenv_cfg.exists():
+            return None
+
+        try:
+            with open(pyvenv_cfg) as f:
+                for line in f:
+                    if line.startswith("version_info ="):
+                        # Extract version like "3.12.10" and return just "3.12"
+                        version_str = line.split("=", 1)[1].strip()
+                        version_parts = version_str.split(".")
+                        if len(version_parts) >= 2:
+                            return f"{version_parts[0]}.{version_parts[1]}"
+        except OSError:
+            pass
+
+        return None
+
     def create_venv(self, venv_path, parent_path=None, uv_args=None):
         """Create a virtual environment with optional parent hierarchy"""
         venv_path = Path(venv_path).resolve()
@@ -91,6 +111,45 @@ class HierarchicalUV:
                     file=sys.stderr,
                 )
                 sys.exit(1)
+
+            # Validate Python version compatibility with parent
+            parent_python_version = self._get_python_version(parent_path)
+            if parent_python_version:
+                # Check if specific Python version requested via uv args
+                requested_python_version = None
+                python_specified = False
+                if uv_args:
+                    for i, arg in enumerate(uv_args):
+                        if arg == "--python" and i + 1 < len(uv_args):
+                            python_specified = True
+                            python_arg = uv_args[i + 1]
+                            # Extract version from python executable path or version string
+                            import re
+
+                            version_match = re.search(r"(\d+\.\d+)", python_arg)
+                            if version_match:
+                                requested_python_version = version_match.group(1)
+                            break
+
+                # If a specific Python version was requested, validate compatibility
+                if (
+                    requested_python_version
+                    and requested_python_version != parent_python_version
+                ):
+                    print(
+                        f"Error: Child environment Python version ({requested_python_version}) "
+                        f"must match parent environment Python version ({parent_python_version}) "
+                        f"for package compatibility.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+
+                # If no Python version specified, automatically use parent's version
+                if not python_specified:
+                    if uv_args is None:
+                        uv_args = []
+                    uv_args.extend(["--python", parent_python_version])
+                    print(f"Using parent's Python version: {parent_python_version}")
 
         # Build uv command
         cmd = [self.uv_executable, "venv", str(venv_path)]
@@ -182,7 +241,7 @@ if [ -d "$PARENT_VENV_PATH" ]; then
     if ! [ -z "${{PYTHONPATH+_}}" ] ; then
         _OLD_VIRTUAL_PYTHONPATH="$PYTHONPATH"
     fi
-    
+
     # Add parent site-packages to PYTHONPATH (appended, so child takes precedence)
     # Use find to locate site-packages directories to avoid shell glob issues
     for parent_site in "$PARENT_VENV_PATH"/lib/python*/site-packages; do
@@ -533,7 +592,7 @@ sys.path[:0] = new_paths
         if requirements_files:
             for req_file in requirements_files:
                 try:
-                    with open(req_file, "r") as f:
+                    with open(req_file) as f:
                         for line in f:
                             line = line.strip()
                             # Skip empty lines and comments
@@ -1198,3 +1257,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
