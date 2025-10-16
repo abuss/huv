@@ -13,6 +13,46 @@ import unittest
 from pathlib import Path
 
 
+def get_venv_bin_dir(venv_path):
+    """Get the appropriate bin/Scripts directory for the current platform"""
+    if platform.system() == "Windows":
+        return venv_path / "Scripts"
+    else:
+        return venv_path / "bin"
+
+
+def get_activate_script(venv_path):
+    """Get the appropriate activation script for the current platform"""
+    if platform.system() == "Windows":
+        return venv_path / "Scripts" / "activate.bat"
+    else:
+        return venv_path / "bin" / "activate"
+
+
+def get_python_executable(venv_path):
+    """Get the appropriate Python executable for the current platform"""
+    if platform.system() == "Windows":
+        return venv_path / "Scripts" / "python.exe"
+    else:
+        return venv_path / "bin" / "python"
+
+
+def get_pip_executable(venv_path):
+    """Get the appropriate pip executable for the current platform"""
+    if platform.system() == "Windows":
+        return venv_path / "Scripts" / "pip.exe"
+    else:
+        return venv_path / "bin" / "pip"
+
+
+def get_activate_this_py(venv_path):
+    """Get the appropriate activate_this.py script for the current platform"""
+    if platform.system() == "Windows":
+        return venv_path / "Scripts" / "activate_this.py"
+    else:
+        return venv_path / "bin" / "activate_this.py"
+
+
 class TestHuv(unittest.TestCase):
     """Test suite for huv functionality"""
 
@@ -62,8 +102,8 @@ class TestHuv(unittest.TestCase):
         venv_path = self.test_dir / venv_name
         self.assertTrue(venv_path.exists())
         self.assertTrue((venv_path / "pyvenv.cfg").exists())
-        self.assertTrue((venv_path / "bin" / "activate").exists())
-        self.assertTrue((venv_path / "bin" / "python").exists())
+        self.assertTrue(get_activate_script(venv_path).exists())
+        self.assertTrue(get_python_executable(venv_path).exists())
 
     def test_create_hierarchical_venv(self):
         """Test creating a hierarchical virtual environment"""
@@ -84,7 +124,7 @@ class TestHuv(unittest.TestCase):
         self.assertTrue(child_path.exists())
 
         # Verify child has hierarchy setup
-        activate_script = child_path / "bin" / "activate"
+        activate_script = get_activate_script(child_path)
         self.assertTrue(activate_script.exists())
 
         with open(activate_script) as f:
@@ -188,7 +228,7 @@ class TestHuv(unittest.TestCase):
         self.run_huv(["venv", child_name, "--parent", parent_name])
 
         # Check activate_this.py exists and has hierarchy setup
-        activate_this = self.test_dir / child_name / "bin" / "activate_this.py"
+        activate_this = get_activate_this_py(self.test_dir / child_name)
         self.assertTrue(activate_this.exists())
 
         with open(activate_this) as f:
@@ -206,7 +246,7 @@ class TestHuv(unittest.TestCase):
 
         # Check that pip was installed (seed packages)
         venv_path = self.test_dir / venv_name
-        pip_path = venv_path / "bin" / "pip"
+        pip_path = get_pip_executable(venv_path)
         self.assertTrue(pip_path.exists())
 
     def test_hierarchical_with_additional_args(self):
@@ -219,14 +259,14 @@ class TestHuv(unittest.TestCase):
         self.run_huv(["venv", child_name, "--parent", parent_name, "--seed"])
 
         # Verify both have pip and hierarchy
-        parent_pip = self.test_dir / parent_name / "bin" / "pip"
-        child_pip = self.test_dir / child_name / "bin" / "pip"
+        parent_pip = get_pip_executable(self.test_dir / parent_name)
+        child_pip = get_pip_executable(self.test_dir / child_name)
 
         self.assertTrue(parent_pip.exists())
         self.assertTrue(child_pip.exists())
 
         # Verify hierarchy setup
-        activate_script = self.test_dir / child_name / "bin" / "activate"
+        activate_script = get_activate_script(self.test_dir / child_name)
         with open(activate_script) as f:
             content = f.read()
             self.assertIn("PARENT_VENV_PATH", content)
