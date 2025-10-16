@@ -105,17 +105,17 @@ class HierarchicalUV:
 
         if for_windows_script:
             # For Windows batch files and PowerShell, we need proper escaping
-            # Use forward slashes for PowerShell (which accepts both) and
-            # double backslashes for batch files
-            if self.is_windows:
-                # Use as_posix() to get forward slashes, which work in both batch and PS
-                return path_obj.as_posix()
-            else:
-                # On Unix systems, just return the string representation
-                return str(path_obj)
+            # Always use forward slashes to avoid Unicode escape issues
+            path_str = str(path_obj)
+            # Convert backslashes to forward slashes for Windows scripts
+            # This prevents Unicode escape sequence errors when paths contain \U, \n, etc.
+            return path_str.replace("\\", "/")
         else:
-            # For general use, return appropriate format for the platform
-            return str(path_obj)
+            # For general use, also convert backslashes to avoid Unicode escape issues
+            # in f-strings and print statements
+            path_str = str(path_obj)
+            # On Windows paths, replace backslashes to prevent Unicode escape errors
+            return path_str.replace("\\", "/")
 
     def _find_uv(self) -> str:
         """
@@ -209,14 +209,18 @@ class HierarchicalUV:
         if parent_path:
             parent_path = Path(parent_path).resolve()
             if not parent_path.exists():
-                parent_path_str = self._get_safe_path_string(parent_path, for_windows_script=False)
+                parent_path_str = self._get_safe_path_string(
+                    parent_path, for_windows_script=False
+                )
                 print(
                     f"Error: Parent environment '{parent_path_str}' does not exist.",
                     file=sys.stderr,
                 )
                 sys.exit(1)
             if not (parent_path / "pyvenv.cfg").exists():
-                parent_path_str = self._get_safe_path_string(parent_path, for_windows_script=False)
+                parent_path_str = self._get_safe_path_string(
+                    parent_path, for_windows_script=False
+                )
                 print(
                     f"Error: '{parent_path_str}' is not a valid virtual environment.",
                     file=sys.stderr,
@@ -226,7 +230,9 @@ class HierarchicalUV:
             # Check for activation script based on platform
             activate_script = self._get_activation_script_path(parent_path)
             if not activate_script.exists():
-                parent_path_str = self._get_safe_path_string(parent_path, for_windows_script=False)
+                parent_path_str = self._get_safe_path_string(
+                    parent_path, for_windows_script=False
+                )
                 print(
                     f"Error: Parent environment '{parent_path_str}' is missing activate script.",
                     file=sys.stderr,
@@ -281,9 +287,12 @@ class HierarchicalUV:
         if uv_args:
             cmd.extend(uv_args)
 
-        print(f"Creating virtual environment: {venv_path}")
+        venv_path_str = self._get_safe_path_string(venv_path, for_windows_script=False)
+        print(f"Creating virtual environment: {venv_path_str}")
         if parent_path:
-            parent_path_str = self._get_safe_path_string(parent_path, for_windows_script=False)
+            parent_path_str = self._get_safe_path_string(
+                parent_path, for_windows_script=False
+            )
             print(f"Parent environment: {parent_path_str}")
 
         try:
@@ -303,7 +312,9 @@ class HierarchicalUV:
 
         # If parent is specified, modify activation scripts
         if parent_path:
-            parent_path_str = self._get_safe_path_string(parent_path, for_windows_script=False)
+            parent_path_str = self._get_safe_path_string(
+                parent_path, for_windows_script=False
+            )
             print(f"Setting up hierarchy with parent: {parent_path_str}")
             try:
                 self._setup_hierarchy(venv_path, parent_path)
@@ -315,15 +326,24 @@ class HierarchicalUV:
                 )
                 sys.exit(1)
 
-        print(f"[OK] Virtual environment created successfully at: {venv_path}")
+        venv_path_str = self._get_safe_path_string(venv_path, for_windows_script=False)
+        print(f"[OK] Virtual environment created successfully at: {venv_path_str}")
         if parent_path:
-            parent_path_str = self._get_safe_path_string(parent_path, for_windows_script=False)
+            parent_path_str = self._get_safe_path_string(
+                parent_path, for_windows_script=False
+            )
             print(f"[OK] Hierarchy configured with parent: {parent_path_str}")
             if self.is_windows:
                 activate_path = Path(venv_path) / "Scripts" / "activate.bat"
-                print(f"  Use: {activate_path}")
+                activate_path_str = self._get_safe_path_string(
+                    activate_path, for_windows_script=False
+                )
+                print(f"  Use: {activate_path_str}")
             else:
-                print(f"  Use: source {venv_path}/bin/activate")
+                venv_path_str = self._get_safe_path_string(
+                    venv_path, for_windows_script=False
+                )
+                print(f"  Use: source {venv_path_str}/bin/activate")
 
     def _setup_hierarchy(
         self, venv_path: Union[str, Path], parent_path: Union[str, Path]
@@ -348,7 +368,9 @@ class HierarchicalUV:
         pyvenv_cfg = venv_path / "pyvenv.cfg"
         if pyvenv_cfg.exists():
             with open(pyvenv_cfg, "a") as f:
-                parent_path_safe = self._get_safe_path_string(parent_path, for_windows_script=False)
+                parent_path_safe = self._get_safe_path_string(
+                    parent_path, for_windows_script=False
+                )
                 f.write(f"huv_parent = {parent_path_safe}\n")
 
         if self.is_windows:

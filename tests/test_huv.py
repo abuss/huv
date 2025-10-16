@@ -447,7 +447,8 @@ class TestHuvIntegration(unittest.TestCase):
             activate_cmd = str(parent_path / "Scripts" / "activate.bat")
             python_cmd = str(parent_path / "Scripts" / "python.exe")
         else:
-            activate_cmd = f"source {parent_path}/bin/activate"
+            activate_script_path = parent_path / "bin" / "activate"
+            activate_cmd = f"source {activate_script_path}"
             python_cmd = str(parent_path / "bin" / "python")
 
         # Install requests in parent (using uv pip directly to avoid complexity)
