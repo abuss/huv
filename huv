@@ -1501,6 +1501,11 @@ def main() -> None:
 
     All other commands are passed through directly to uv.
     """
+    # Show huv help for --help or -h
+    if len(sys.argv) >= 2 and sys.argv[1] in ["--help", "-h"]:
+        print(__doc__.strip())
+        return
+
     huv = HierarchicalUV()
 
     # Check if this is a huv-specific command that needs special handling
