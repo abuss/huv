@@ -18,8 +18,20 @@ A powerful wrapper around [uv](https://github.com/astral-sh/uv) that creates hie
 - [uv](https://github.com/astral-sh/uv) installed and available in PATH
 
 Install uv if you haven't already:
+
+**Linux/macOS:**
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+**Windows (PowerShell):**
+```powershell
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+**Windows (via winget):**
+```cmd
+winget install astral-sh.uv
 ```
 
 ## 🚀 Installation
@@ -52,7 +64,18 @@ pip install .
 ```bash
 # Create a root environment with common packages
 huv venv .vroot
+```
+
+**Activating on Linux/macOS:**
+```bash
 cd .vroot && source bin/activate
+uv pip install numpy pandas requests
+deactivate && cd ..
+```
+
+**Activating on Windows:**
+```cmd
+cd .vroot && Scripts\activate.bat
 uv pip install numpy pandas requests
 deactivate && cd ..
 ```
@@ -61,7 +84,19 @@ deactivate && cd ..
 ```bash
 # Create a child environment that inherits from .vroot
 huv venv .vchild --parent .vroot
+```
+
+**Activating on Linux/macOS:**
+```bash
 cd .vchild && source bin/activate
+
+# numpy, pandas, requests are already available from parent!
+python -c "import numpy, pandas, requests; print('All packages available!')"
+```
+
+**Activating on Windows:**
+```cmd
+cd .vchild && Scripts\activate.bat
 
 # numpy, pandas, requests are already available from parent!
 python -c "import numpy, pandas, requests; print('All packages available!')"
@@ -189,6 +224,7 @@ huv pip uninstall package1
 ## 🎯 Use Cases
 
 ### Development Environments
+**Linux/macOS:**
 ```bash
 # Base environment with common tools
 huv venv .base
@@ -199,7 +235,19 @@ huv venv project1 --parent .base  # Inherits pytest, black, etc.
 huv venv project2 --parent .base  # Inherits pytest, black, etc.
 ```
 
+**Windows:**
+```cmd
+# Base environment with common tools
+huv venv .base
+.base\Scripts\activate.bat && uv pip install pytest black ruff mypy
+
+# Project-specific environments
+huv venv project1 --parent .base  # Inherits pytest, black, etc.
+huv venv project2 --parent .base  # Inherits pytest, black, etc.
+```
+
 ### Machine Learning Workflows
+**Linux/macOS:**
 ```bash
 # Base ML environment
 huv venv .ml-base
@@ -210,11 +258,34 @@ huv venv experiment1 --parent .ml-base  # + tensorflow
 huv venv experiment2 --parent .ml-base  # + pytorch
 ```
 
+**Windows:**
+```cmd
+# Base ML environment
+huv venv .ml-base
+.ml-base\Scripts\activate.bat && uv pip install numpy pandas scikit-learn
+
+# Experiment environments
+huv venv experiment1 --parent .ml-base  # + tensorflow
+huv venv experiment2 --parent .ml-base  # + pytorch
+```
+
 ### Microservices
+**Linux/macOS:**
 ```bash
 # Shared utilities environment
 huv venv .shared
 source .shared/bin/activate && uv pip install requests pydantic fastapi
+
+# Service-specific environments
+huv venv auth-service --parent .shared     # + additional auth packages
+huv venv user-service --parent .shared     # + additional user packages
+```
+
+**Windows:**
+```cmd
+# Shared utilities environment
+huv venv .shared
+.shared\Scripts\activate.bat && uv pip install requests pydantic fastapi
 
 # Service-specific environments
 huv venv auth-service --parent .shared     # + additional auth packages
@@ -230,6 +301,60 @@ huv venv user-service --parent .shared     # + additional user packages
 3. **Smart Installation**: Only packages not available from parents are installed, using `--no-deps` when necessary to avoid conflicts
 
 4. **Precedence**: Child environment packages always take precedence over parent packages
+
+## 🖥️ Cross-Platform Support
+
+huv works seamlessly across Linux, macOS, and Windows with automatic OS detection and platform-specific handling:
+
+### Platform Differences
+- **Linux/macOS**: Uses `bin/activate` scripts and `lib/python*/site-packages` directories
+- **Windows**: Uses `Scripts\activate.bat` scripts and `Lib\site-packages` directories
+
+### Activation Commands
+**Linux/macOS:**
+```bash
+source myenv/bin/activate
+```
+
+**Windows Command Prompt:**
+```cmd
+myenv\Scripts\activate.bat
+```
+
+**Windows PowerShell:**
+```powershell
+myenv\Scripts\Activate.ps1
+```
+
+### Environment Structure
+**Linux/macOS:**
+```
+myenv/
+├── bin/
+│   ├── activate
+│   ├── activate.fish
+│   ├── activate.csh
+│   ├── activate.nu
+│   └── python
+├── lib/
+│   └── python3.x/
+│       └── site-packages/
+└── pyvenv.cfg
+```
+
+**Windows:**
+```
+myenv\
+├── Scripts\
+│   ├── activate.bat
+│   ├── Activate.ps1
+│   └── python.exe
+├── Lib\
+│   └── site-packages\
+└── pyvenv.cfg
+```
+
+All huv features work identically across platforms - only the activation commands differ.
 
 ## 📚 Complete Flag Support
 
@@ -323,13 +448,23 @@ huv venv child --parent .parent --python 3.10  # ❌ Error: Version mismatch
 
 ### Environment Information
 
+**Check environment hierarchy:**
 ```bash
-# Check environment hierarchy
 cat child/pyvenv.cfg | grep huv_parent
 # Output: huv_parent = /path/to/.parent
+```
 
-# Verify package inheritance
+**Verify package inheritance:**
+
+**Linux/macOS:**
+```bash
 source child/bin/activate
+python -c "import sys; print(sys.path)"  # Shows parent paths
+```
+
+**Windows:**
+```cmd
+child\Scripts\activate.bat
 python -c "import sys; print(sys.path)"  # Shows parent paths
 ```
 
@@ -432,14 +567,34 @@ huv pip install --no-deps package-name
 uv cache clean
 
 # Check what packages are inherited
+```
+
+**Linux/macOS:**
+```bash
 source child/bin/activate
 python -c "import package; print(package.__file__)"  # Shows source location
 ```
 
+**Windows:**
+```cmd
+child\Scripts\activate.bat
+python -c "import package; print(package.__file__)"  # Shows source location
+```
+
 #### Python Version Issues
+**Linux/macOS:**
 ```bash
 # Check parent Python version
-python parent-env/bin/python --version
+parent-env/bin/python --version
+
+# Create child with explicit version matching parent
+huv venv child --parent parent-env --python 3.11
+```
+
+**Windows:**
+```cmd
+# Check parent Python version
+parent-env\Scripts\python.exe --version
 
 # Create child with explicit version matching parent
 huv venv child --parent parent-env --python 3.11
@@ -464,7 +619,18 @@ huv venv child --parent .parent --verbose  # If supported
 
 # Manual inspection of environment
 cat child/pyvenv.cfg
+```
+
+**Check activation script modifications:**
+
+**Linux/macOS:**
+```bash
 cat child/bin/activate  # Check PYTHONPATH modifications
+```
+
+**Windows:**
+```cmd
+type child\Scripts\activate.bat  # Check PYTHONPATH modifications
 ```
 
 ## 🤝 Contributing

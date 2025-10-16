@@ -23,6 +23,7 @@ Version: 0.3.0
 import argparse
 import json
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -47,6 +48,42 @@ class HierarchicalUV:
         """Initialize the HierarchicalUV manager."""
         self.uv_executable = self._find_uv()
         self.current_venv = self._get_current_venv()
+        self.is_windows = platform.system() == "Windows"
+
+    def _get_activation_script_path(
+        self, venv_path: Union[str, Path], script_name: str = "activate"
+    ) -> Path:
+        """
+        Get the platform-specific path to activation scripts.
+
+        Args:
+            venv_path (str|Path): Path to the virtual environment
+            script_name (str): Name of the activation script (without extension)
+
+        Returns:
+            Path: Platform-specific path to the activation script
+        """
+        venv_path = Path(venv_path)
+        if self.is_windows:
+            return venv_path / "Scripts" / f"{script_name}.bat"
+        else:
+            return venv_path / "bin" / script_name
+
+    def _get_python_executable_path(self, venv_path: Union[str, Path]) -> Path:
+        """
+        Get the platform-specific path to the Python executable.
+
+        Args:
+            venv_path (str|Path): Path to the virtual environment
+
+        Returns:
+            Path: Platform-specific path to the Python executable
+        """
+        venv_path = Path(venv_path)
+        if self.is_windows:
+            return venv_path / "Scripts" / "python.exe"
+        else:
+            return venv_path / "bin" / "python"
 
     def _find_uv(self) -> str:
         """
@@ -151,7 +188,10 @@ class HierarchicalUV:
                     file=sys.stderr,
                 )
                 sys.exit(1)
-            if not (parent_path / "bin" / "activate").exists():
+
+            # Check for activation script based on platform
+            activate_script = self._get_activation_script_path(parent_path)
+            if not activate_script.exists():
                 print(
                     f"Error: Parent environment '{parent_path}' is missing activate script.",
                     file=sys.stderr,
@@ -217,7 +257,8 @@ class HierarchicalUV:
             sys.exit(1)
 
         # Verify the environment was created successfully
-        if not (venv_path / "bin" / "activate").exists():
+        activate_script = self._get_activation_script_path(venv_path)
+        if not activate_script.exists():
             print(
                 "Error: Virtual environment creation failed - missing activate script",
                 file=sys.stderr,
@@ -240,7 +281,10 @@ class HierarchicalUV:
         print(f"✓ Virtual environment created successfully at: {venv_path}")
         if parent_path:
             print(f"✓ Hierarchy configured with parent: {parent_path}")
-            print(f"  Use: source {venv_path}/bin/activate")
+            if self.is_windows:
+                print(f"  Use: {venv_path}\\Scripts\\activate.bat")
+            else:
+                print(f"  Use: source {venv_path}/bin/activate")
 
     def _setup_hierarchy(
         self, venv_path: Union[str, Path], parent_path: Union[str, Path]
@@ -254,14 +298,29 @@ class HierarchicalUV:
         Behavior:
             - Modifies activation scripts for all shells to include parent environment logic.
             - Modifies the Python 'activate_this.py' script for hierarchical activation.
+            - Handles Windows and Unix activation scripts appropriately.
+            - Writes parent information to pyvenv.cfg
 
         """
-        self._modify_bash_activate(venv_path, parent_path)
-        self._modify_fish_activate(venv_path, parent_path)
-        self._modify_csh_activate(venv_path, parent_path)
-        self._modify_powershell_activate(venv_path, parent_path)
+        venv_path = Path(venv_path)
+        parent_path = Path(parent_path)
+
+        # Write parent information to pyvenv.cfg
+        pyvenv_cfg = venv_path / "pyvenv.cfg"
+        if pyvenv_cfg.exists():
+            with open(pyvenv_cfg, "a") as f:
+                f.write(f"huv_parent = {parent_path}\n")
+
+        if self.is_windows:
+            self._modify_windows_batch_activate(venv_path, parent_path)
+            self._modify_powershell_activate(venv_path, parent_path)
+        else:
+            self._modify_bash_activate(venv_path, parent_path)
+            self._modify_fish_activate(venv_path, parent_path)
+            self._modify_csh_activate(venv_path, parent_path)
+
+        # These are available on both platforms
         self._modify_nushell_activate(venv_path, parent_path)
-        self._modify_batch_activate(venv_path, parent_path)
         self._modify_activate_this_py(venv_path, parent_path)
 
     def _modify_bash_activate(
@@ -273,7 +332,7 @@ class HierarchicalUV:
         activate_script = venv_path / "bin" / "activate"
 
         if not activate_script.exists():
-            print(f"Warning: Activate script not found at {activate_script}")
+            print(f"Warning: Bash activate script not found at {activate_script}")
             return
 
         # Read the original script
@@ -304,7 +363,37 @@ class HierarchicalUV:
         content = content.replace(old_pythonhome_section, deactivate_insertion)
 
         # Add hierarchical support at the end
-        hierarchy_code = f'''
+        if self.is_windows:
+            # When running on Windows, parent paths need to use Windows structure
+            hierarchy_code = f'''
+# Hierarchical environment support - include parent libraries
+PARENT_VENV_PATH="{parent_path}"
+if [ -d "$PARENT_VENV_PATH" ]; then
+    # Store old PYTHONPATH
+    if ! [ -z "${{PYTHONPATH+_}}" ] ; then
+        _OLD_VIRTUAL_PYTHONPATH="$PYTHONPATH"
+    fi
+
+    # Add parent site-packages to PYTHONPATH (Windows structure: Lib/site-packages)
+    # Use find to locate site-packages directories to avoid shell glob issues
+    for parent_site in "$PARENT_VENV_PATH"/Lib/site-packages; do
+        if [ -d "$parent_site" ]; then
+            if [ -z "${{PYTHONPATH+_}}" ]; then
+                PYTHONPATH="$parent_site"
+            else
+                PYTHONPATH="$PYTHONPATH:$parent_site"
+            fi
+        fi
+    done
+    if [ ! -z "${{PYTHONPATH+_}}" ]; then
+        export PYTHONPATH
+    fi
+fi
+
+'''
+        else:
+            # Unix paths
+            hierarchy_code = f'''
 # Hierarchical environment support - include parent libraries
 PARENT_VENV_PATH="{parent_path}"
 if [ -d "$PARENT_VENV_PATH" ]; then
@@ -356,7 +445,33 @@ fi
             content = f.read()
 
         # Add hierarchy support for Fish shell
-        hierarchy_code = f'''
+        if self.is_windows:
+            # Windows paths for Fish
+            hierarchy_code = f'''
+# Hierarchical environment support - include parent libraries
+set PARENT_VENV_PATH "{parent_path}"
+if test -d "$PARENT_VENV_PATH"
+    # Store old PYTHONPATH
+    if set -q PYTHONPATH
+        set -gx _OLD_VIRTUAL_PYTHONPATH $PYTHONPATH
+    end
+
+    # Add parent site-packages to PYTHONPATH (Windows structure)
+    for parent_site in "$PARENT_VENV_PATH"/Lib/site-packages
+        if test -d "$parent_site"
+            if not set -q PYTHONPATH
+                set -gx PYTHONPATH "$parent_site"
+            else
+                set -gx PYTHONPATH "$PYTHONPATH:$parent_site"
+            end
+        end
+    end
+end
+
+'''
+        else:
+            # Unix paths for Fish
+            hierarchy_code = f'''
 # Hierarchical environment support - include parent libraries
 set PARENT_VENV_PATH "{parent_path}"
 if test -d "$PARENT_VENV_PATH"
@@ -417,7 +532,33 @@ end
             content = f.read()
 
         # Add hierarchy support for C shell
-        hierarchy_code = f'''
+        if self.is_windows:
+            # Windows paths for C shell
+            hierarchy_code = f'''
+# Hierarchical environment support - include parent libraries
+set PARENT_VENV_PATH = "{parent_path}"
+if ( -d "$PARENT_VENV_PATH" ) then
+    # Store old PYTHONPATH
+    if ( $?PYTHONPATH ) then
+        setenv _OLD_VIRTUAL_PYTHONPATH "$PYTHONPATH"
+    endif
+
+    # Add parent site-packages to PYTHONPATH (Windows structure)
+    foreach parent_site ( "$PARENT_VENV_PATH"/Lib/site-packages )
+        if ( -d "$parent_site" ) then
+            if ( ! $?PYTHONPATH ) then
+                setenv PYTHONPATH "$parent_site"
+            else
+                setenv PYTHONPATH "$PYTHONPATH:$parent_site"
+            endif
+        endif
+    end
+endif
+
+'''
+        else:
+            # Unix paths for C shell
+            hierarchy_code = f'''
 # Hierarchical environment support - include parent libraries
 set PARENT_VENV_PATH = "{parent_path}"
 if ( -d "$PARENT_VENV_PATH" ) then
@@ -465,13 +606,67 @@ endif
         with open(activate_script, "w") as f:
             f.write(content)
 
+    def _modify_windows_batch_activate(
+        self, venv_path: Union[str, Path], parent_path: Union[str, Path]
+    ) -> None:
+        """Modify the Windows batch activate script"""
+        venv_path = Path(venv_path)
+        parent_path = Path(parent_path)
+        activate_script = venv_path / "Scripts" / "activate.bat"
+
+        if not activate_script.exists():
+            print(
+                f"Warning: Windows batch activate script not found at {activate_script}"
+            )
+            return
+
+        # Read the original script
+        with open(activate_script) as f:
+            content = f.read()
+
+        # Add hierarchy support for Windows batch - Windows uses semicolon as path separator
+        hierarchy_code = f"""
+@REM Hierarchical environment support - include parent libraries
+@set "PARENT_VENV_PATH={parent_path}"
+@if exist "%PARENT_VENV_PATH%" (
+    @REM Store old PYTHONPATH
+    @if defined PYTHONPATH (
+        @set "_OLD_VIRTUAL_PYTHONPATH=%PYTHONPATH%"
+    )
+
+    @REM Add parent site-packages to PYTHONPATH
+    @for /d %%i in ("%PARENT_VENV_PATH%\\Lib\\site-packages") do (
+        @if exist "%%i" (
+            @if not defined PYTHONPATH (
+                @set "PYTHONPATH=%%i"
+            ) else (
+                @set "PYTHONPATH=%PYTHONPATH%;%%i"
+            )
+        )
+    )
+)
+
+"""
+
+        # Insert at the end of the script
+        content = content + hierarchy_code
+
+        # Write the modified script
+        with open(activate_script, "w") as f:
+            f.write(content)
+
     def _modify_powershell_activate(
         self, venv_path: Union[str, Path], parent_path: Union[str, Path]
     ) -> None:
         """Modify the PowerShell activate script"""
         venv_path = Path(venv_path)
         parent_path = Path(parent_path)
-        activate_script = venv_path / "bin" / "activate.ps1"
+
+        # PowerShell script location differs by platform
+        if self.is_windows:
+            activate_script = venv_path / "Scripts" / "Activate.ps1"
+        else:
+            activate_script = venv_path / "bin" / "activate.ps1"
 
         if not activate_script.exists():
             print(f"Warning: PowerShell activate script not found at {activate_script}")
@@ -482,7 +677,9 @@ endif
             content = f.read()
 
         # Add hierarchy support for PowerShell
-        hierarchy_code = f'''
+        if self.is_windows:
+            # Windows PowerShell paths
+            hierarchy_code = f'''
 # Hierarchical environment support - include parent libraries
 $PARENT_VENV_PATH = "{parent_path}"
 if (Test-Path $PARENT_VENV_PATH) {{
@@ -491,13 +688,36 @@ if (Test-Path $PARENT_VENV_PATH) {{
         $global:_OLD_VIRTUAL_PYTHONPATH = $env:PYTHONPATH
     }}
 
-    # Add parent site-packages to PYTHONPATH (appended, so child takes precedence)
-    $parentSites = Get-ChildItem "$PARENT_VENV_PATH/lib/python*/site-packages" -Directory 2>$null
+    # Add parent site-packages to PYTHONPATH (Windows uses semicolon separator)
+    $parentSites = Get-ChildItem "$PARENT_VENV_PATH\\Lib\\site-packages" -Directory 2>$null
     foreach ($parentSite in $parentSites) {{
         if (!$env:PYTHONPATH) {{
             $env:PYTHONPATH = $parentSite.FullName
         }} else {{
             $env:PYTHONPATH = "$env:PYTHONPATH;" + $parentSite.FullName
+        }}
+    }}
+}}
+
+'''
+        else:
+            # Unix PowerShell paths
+            hierarchy_code = f'''
+# Hierarchical environment support - include parent libraries
+$PARENT_VENV_PATH = "{parent_path}"
+if (Test-Path $PARENT_VENV_PATH) {{
+    # Store old PYTHONPATH
+    if ($env:PYTHONPATH) {{
+        $global:_OLD_VIRTUAL_PYTHONPATH = $env:PYTHONPATH
+    }}
+
+    # Add parent site-packages to PYTHONPATH (Unix uses colon separator)
+    $parentSites = Get-ChildItem "$PARENT_VENV_PATH/lib/python*/site-packages" -Directory 2>$null
+    foreach ($parentSite in $parentSites) {{
+        if (!$env:PYTHONPATH) {{
+            $env:PYTHONPATH = $parentSite.FullName
+        }} else {{
+            $env:PYTHONPATH = "$env:PYTHONPATH:" + $parentSite.FullName
         }}
     }}
 }}
@@ -574,60 +794,18 @@ if (Test-Path $PARENT_VENV_PATH) {{
         with open(activate_script, "w") as f:
             f.write(content)
 
-    def _modify_batch_activate(
-        self, venv_path: Union[str, Path], parent_path: Union[str, Path]
-    ) -> None:
-        """Modify the Windows batch activate script"""
-        venv_path = Path(venv_path)
-        parent_path = Path(parent_path)
-        activate_script = venv_path / "bin" / "activate.bat"
-
-        if not activate_script.exists():
-            # Batch is Windows-specific, so don't warn if missing on Unix
-            return
-
-        # Read the original script
-        with open(activate_script) as f:
-            content = f.read()
-
-        # Add hierarchy support for batch - Windows uses semicolon as path separator
-        hierarchy_code = f"""
-@REM Hierarchical environment support - include parent libraries
-@set "PARENT_VENV_PATH={parent_path}"
-@if exist "%PARENT_VENV_PATH%" (
-    @REM Store old PYTHONPATH
-    @if defined PYTHONPATH (
-        @set "_OLD_VIRTUAL_PYTHONPATH=%PYTHONPATH%"
-    )
-
-    @REM Add parent site-packages to PYTHONPATH
-    @for /d %%i in ("%PARENT_VENV_PATH%\\lib\\python*") do (
-        @if exist "%%i\\site-packages" (
-            @if not defined PYTHONPATH (
-                @set "PYTHONPATH=%%i\\site-packages"
-            ) else (
-                @set "PYTHONPATH=%PYTHONPATH%;%%i\\site-packages"
-            )
-        )
-    )
-)
-
-"""
-
-        # Insert at the end of the script
-        content = content + hierarchy_code
-
-        # Write the modified script
-        with open(activate_script, "w") as f:
-            f.write(content)
-
     def _modify_activate_this_py(
         self, venv_path: Union[str, Path], parent_path: Union[str, Path]
     ) -> None:
         """Modify the activate_this.py script"""
         venv_path = Path(venv_path)
         parent_path = Path(parent_path)
-        activate_this = venv_path / "bin" / "activate_this.py"
+
+        # activate_this.py location differs by platform
+        if self.is_windows:
+            activate_this = venv_path / "Scripts" / "activate_this.py"
+        else:
+            activate_this = venv_path / "bin" / "activate_this.py"
 
         if not activate_this.exists():
             print(f"Warning: activate_this.py not found at {activate_this}")
@@ -642,13 +820,28 @@ if (Test-Path $PARENT_VENV_PATH) {{
             r"# add the virtual environments libraries.*?sys\.path\[:] = .*?\n"
         )
 
-        # Create the new hierarchical version
+        # Create the new hierarchical version with platform-specific paths
+        if self.is_windows:
+            child_lib_pattern_code = (
+                'os.path.join(bin_dir, "..", "Lib", "site-packages")'
+            )
+            parent_lib_pattern_code = (
+                f'os.path.join("{parent_path}", "Lib", "site-packages")'
+            )
+        else:
+            child_lib_pattern_code = (
+                'os.path.join(bin_dir, "..", "lib", "python*", "site-packages")'
+            )
+            parent_lib_pattern_code = (
+                f'os.path.join("{parent_path}", "lib", "python*", "site-packages")'
+            )
+
         new_syspath_section = f'''# add the virtual environments libraries to the host python import mechanism
 import glob
 prev_length = len(sys.path)
 
 # Add child environment libraries first (highest precedence)
-child_lib_pattern = os.path.join(bin_dir, "..", "lib", "python*", "site-packages")
+child_lib_pattern = {child_lib_pattern_code}
 for child_site_packages in glob.glob(child_lib_pattern):
     if os.path.exists(child_site_packages):
         site.addsitedir(child_site_packages)
@@ -656,7 +849,7 @@ for child_site_packages in glob.glob(child_lib_pattern):
 # Add parent environment libraries (lower precedence)
 parent_venv_path = "{parent_path}"
 if os.path.exists(parent_venv_path):
-    parent_lib_pattern = os.path.join(parent_venv_path, "lib", "python*", "site-packages")
+    parent_lib_pattern = {parent_lib_pattern_code}
     for parent_site_packages in glob.glob(parent_lib_pattern):
         if os.path.exists(parent_site_packages):
             site.addsitedir(parent_site_packages)
@@ -702,17 +895,17 @@ sys.path[:0] = new_paths
         if not venv_path:
             return None
 
-        activate_script = venv_path / "bin" / "activate"
-        if not activate_script.exists():
+        pyvenv_cfg = venv_path / "pyvenv.cfg"
+        if not pyvenv_cfg.exists():
             return None
 
         try:
-            with open(activate_script) as f:
+            with open(pyvenv_cfg) as f:
                 content = f.read()
-                # Look for the PARENT_VENV_PATH line
-                match = re.search(r'PARENT_VENV_PATH="([^"]*)"', content)
+                # Look for the huv_parent line
+                match = re.search(r"huv_parent\s*=\s*(.+)", content)
                 if match:
-                    parent_path = match.group(1)
+                    parent_path = match.group(1).strip()
                     if parent_path and Path(parent_path).exists():
                         return Path(parent_path)
         except Exception:
@@ -732,7 +925,7 @@ sys.path[:0] = new_paths
         if not venv_path or not venv_path.exists():
             return {}
 
-        python_exe = venv_path / "bin" / "python"
+        python_exe = self._get_python_executable_path(venv_path)
         if not python_exe.exists():
             return {}
 
