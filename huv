@@ -397,9 +397,13 @@ class HierarchicalUV:
         # Add hierarchical support at the end
         if self.is_windows:
             # When running on Windows, parent paths need to use Windows structure
+            # Use safe path helper for cross-platform compatibility
+            parent_path_safe = self._get_safe_path_string(
+                parent_path, for_windows_script=False
+            )
             hierarchy_code = f'''
 # Hierarchical environment support - include parent libraries
-PARENT_VENV_PATH="{parent_path}"
+PARENT_VENV_PATH="{parent_path_safe}"
 if [ -d "$PARENT_VENV_PATH" ]; then
     # Store old PYTHONPATH
     if ! [ -z "${{PYTHONPATH+_}}" ] ; then
@@ -424,10 +428,13 @@ fi
 
 '''
         else:
-            # Unix paths
+            # Unix paths - use safe path helper for consistency
+            parent_path_safe = self._get_safe_path_string(
+                parent_path, for_windows_script=False
+            )
             hierarchy_code = f'''
 # Hierarchical environment support - include parent libraries
-PARENT_VENV_PATH="{parent_path}"
+PARENT_VENV_PATH="{parent_path_safe}"
 if [ -d "$PARENT_VENV_PATH" ]; then
     # Store old PYTHONPATH
     if ! [ -z "${{PYTHONPATH+_}}" ] ; then
@@ -478,10 +485,13 @@ fi
 
         # Add hierarchy support for Fish shell
         if self.is_windows:
-            # Windows paths for Fish
+            # Windows paths for Fish - use safe path helper for cross-platform compatibility
+            parent_path_safe = self._get_safe_path_string(
+                parent_path, for_windows_script=False
+            )
             hierarchy_code = f'''
 # Hierarchical environment support - include parent libraries
-set PARENT_VENV_PATH "{parent_path}"
+set PARENT_VENV_PATH "{parent_path_safe}"
 if test -d "$PARENT_VENV_PATH"
     # Store old PYTHONPATH
     if set -q PYTHONPATH
@@ -502,10 +512,13 @@ end
 
 '''
         else:
-            # Unix paths for Fish
+            # Unix paths for Fish - use safe path helper for consistency
+            parent_path_safe = self._get_safe_path_string(
+                parent_path, for_windows_script=False
+            )
             hierarchy_code = f'''
 # Hierarchical environment support - include parent libraries
-set PARENT_VENV_PATH "{parent_path}"
+set PARENT_VENV_PATH "{parent_path_safe}"
 if test -d "$PARENT_VENV_PATH"
     # Store old PYTHONPATH
     if set -q PYTHONPATH
@@ -565,10 +578,13 @@ end
 
         # Add hierarchy support for C shell
         if self.is_windows:
-            # Windows paths for C shell
+            # Windows paths for C shell - use safe path helper for cross-platform compatibility
+            parent_path_safe = self._get_safe_path_string(
+                parent_path, for_windows_script=False
+            )
             hierarchy_code = f'''
 # Hierarchical environment support - include parent libraries
-set PARENT_VENV_PATH = "{parent_path}"
+set PARENT_VENV_PATH = "{parent_path_safe}"
 if ( -d "$PARENT_VENV_PATH" ) then
     # Store old PYTHONPATH
     if ( $?PYTHONPATH ) then
@@ -589,10 +605,13 @@ endif
 
 '''
         else:
-            # Unix paths for C shell
+            # Unix paths for C shell - use safe path helper for consistency
+            parent_path_safe = self._get_safe_path_string(
+                parent_path, for_windows_script=False
+            )
             hierarchy_code = f'''
 # Hierarchical environment support - include parent libraries
-set PARENT_VENV_PATH = "{parent_path}"
+set PARENT_VENV_PATH = "{parent_path_safe}"
 if ( -d "$PARENT_VENV_PATH" ) then
     # Store old PYTHONPATH
     if ( $?PYTHONPATH ) then
@@ -809,9 +828,13 @@ if (Test-Path $PARENT_VENV_PATH) {{
 
         # Add hierarchy support for Nushell - this is complex due to Nushell's structure
         # For now, we'll add a simple PYTHONPATH modification
+        # Use safe path helper for cross-platform compatibility
+        parent_path_safe = self._get_safe_path_string(
+            parent_path, for_windows_script=False
+        )
         hierarchy_code = f'''
     # Hierarchical environment support - include parent libraries
-    let parent_venv_path = "{parent_path}"
+    let parent_venv_path = "{parent_path_safe}"
     if ($parent_venv_path | path exists) {{
         let parent_sites = (glob ($parent_venv_path + "/lib/python*/site-packages"))
         if ($parent_sites | length) > 0 {{
@@ -867,15 +890,21 @@ if (Test-Path $PARENT_VENV_PATH) {{
             child_lib_pattern_code = (
                 'os.path.join(bin_dir, "..", "Lib", "site-packages")'
             )
+            parent_path_safe = self._get_safe_path_string(
+                parent_path, for_windows_script=False
+            )
             parent_lib_pattern_code = (
-                f'os.path.join("{parent_path}", "Lib", "site-packages")'
+                f'os.path.join("{parent_path_safe}", "Lib", "site-packages")'
             )
         else:
             child_lib_pattern_code = (
                 'os.path.join(bin_dir, "..", "lib", "python*", "site-packages")'
             )
+            parent_path_safe = self._get_safe_path_string(
+                parent_path, for_windows_script=False
+            )
             parent_lib_pattern_code = (
-                f'os.path.join("{parent_path}", "lib", "python*", "site-packages")'
+                f'os.path.join("{parent_path_safe}", "lib", "python*", "site-packages")'
             )
 
         new_syspath_section = f'''# add the virtual environments libraries to the host python import mechanism
@@ -889,7 +918,7 @@ for child_site_packages in glob.glob(child_lib_pattern):
         site.addsitedir(child_site_packages)
 
 # Add parent environment libraries (lower precedence)
-parent_venv_path = "{parent_path}"
+parent_venv_path = "{parent_path_safe}"
 if os.path.exists(parent_venv_path):
     parent_lib_pattern = {parent_lib_pattern_code}
     for parent_site_packages in glob.glob(parent_lib_pattern):
