@@ -14,56 +14,79 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install uv
+      - name: Install uv (Unix)
+        if: runner.os != 'Windows'
         run: |
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
-            echo "$env:USERPROFILE\.cargo\bin" >> $GITHUB_PATH
-          else
-            curl -LsSf https://astral.sh/uv/install.sh | sh
-            echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-          fi
-        shell: bash
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Install uv (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+          echo "$env:USERPROFILE\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: powershell
 
       - name: Verify uv installation
-        run: uv --version
+        run: |
+          uv --version
+          which uv
+        shell: bash
 
-      - name: Make huv executable
+      - name: Verify uv installation (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          uv --version
+          where uv
+        shell: cmd
+
+      - name: Make huv executable (Unix)
         run: chmod +x huv
         if: runner.os != 'Windows'
 
-      - name: Test huv help command
-        run: |
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            python huv --help
-          else
-            ./huv --help
-          fi
-        shell: bash
+      - name: Test huv help command (Unix)
+        if: runner.os != 'Windows'
+        run: ./huv --help
+
+      - name: Test huv help command (Windows)
+        if: runner.os == 'Windows'
+        run: python huv --help
 
       - name: Run tests
         run: python tests/test_huv.py
 
-      - name: Test huv functionality
+      - name: Test huv functionality (Unix)
+        if: runner.os != 'Windows'
         run: |
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            python huv venv test-env
-            python huv venv test-child --parent test-env
-          else
-            ./huv venv test-env
-            ./huv venv test-child --parent test-env
-          fi
-        shell: bash
+          ./huv venv test-env
+          ./huv venv test-child --parent test-env
+          # Test activation scripts exist
+          test -f test-env/bin/activate
+          test -f test-child/bin/activate
+          # Test hierarchy configuration
+          grep -q "huv_parent" test-child/pyvenv.cfg
+
+      - name: Test huv functionality (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          python huv venv test-env
+          python huv venv test-child --parent test-env
+          # Test activation scripts exist
+          if (!(Test-Path "test-env\Scripts\activate.bat")) { exit 1 }
+          if (!(Test-Path "test-child\Scripts\activate.bat")) { exit 1 }
+          # Test hierarchy configuration
+          if (!(Select-String -Path "test-child\pyvenv.cfg" -Pattern "huv_parent")) { exit 1 }
+        shell: powershell
 
   lint:
     name: Lint and Code Quality
@@ -72,7 +95,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
@@ -93,25 +116,38 @@ jobs:
 
   integration:
     name: Integration Tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     needs: test
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install uv
+      - name: Install uv (Unix)
+        if: runner.os != 'Windows'
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
-      - name: Make huv executable
+      - name: Install uv (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+          echo "$env:USERPROFILE\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: powershell
+
+      - name: Make huv executable (Unix)
+        if: runner.os != 'Windows'
         run: chmod +x huv
 
-      - name: Test complete workflow
+      - name: Test complete workflow (Unix)
+        if: runner.os != 'Windows'
         run: |
           # Test standalone environment
           ./huv venv test-standalone
@@ -124,8 +160,8 @@ jobs:
           test -d test-child
 
           # Verify hierarchy setup
-          grep -q "PARENT_VENV_PATH" test-child/bin/activate
-          grep -q "parent_venv_path" test-child/bin/activate_this.py
+          grep -q "huv_parent" test-child/pyvenv.cfg
+          grep -q "PYTHONPATH" test-child/bin/activate
 
           # Test Python version inheritance
           ./huv venv test-inherit-parent
@@ -137,7 +173,36 @@ jobs:
           ./huv venv test-seed-child --parent test-seed-parent --seed
           test -f test-seed-child/bin/pip
 
-      - name: Test error conditions
+      - name: Test complete workflow (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          # Test standalone environment
+          python huv venv test-standalone
+          if (!(Test-Path "test-standalone")) { exit 1 }
+          if (!(Test-Path "test-standalone\pyvenv.cfg")) { exit 1 }
+
+          # Test hierarchical environment
+          python huv venv test-parent
+          python huv venv test-child --parent test-parent
+          if (!(Test-Path "test-child")) { exit 1 }
+
+          # Verify hierarchy setup
+          if (!(Select-String -Path "test-child\pyvenv.cfg" -Pattern "huv_parent")) { exit 1 }
+          if (!(Select-String -Path "test-child\Scripts\activate.bat" -Pattern "PYTHONPATH")) { exit 1 }
+
+          # Test Python version inheritance
+          python huv venv test-inherit-parent
+          $output = python huv venv test-inherit-child --parent test-inherit-parent 2>&1
+          if (!($output -like "*Using parent's Python version*")) { exit 1 }
+
+          # Test with additional arguments
+          python huv venv test-seed-parent --seed
+          python huv venv test-seed-child --parent test-seed-parent --seed
+          if (!(Test-Path "test-seed-child\Scripts\pip.exe")) { exit 1 }
+        shell: powershell
+
+      - name: Test error conditions (Unix)
+        if: runner.os != 'Windows'
         run: |
           # Test invalid parent
           if ./huv venv test-invalid --parent nonexistent 2>/dev/null; then
@@ -152,6 +217,29 @@ jobs:
             exit 1
           fi
 
+      - name: Test error conditions (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          # Test invalid parent
+          try {
+            python huv venv test-invalid --parent nonexistent 2>$null
+            Write-Host "Should have failed with invalid parent"
+            exit 1
+          } catch {
+            # Expected to fail
+          }
+
+          # Test existing directory
+          New-Item -ItemType Directory -Name "existing-dir"
+          try {
+            python huv venv existing-dir 2>$null
+            Write-Host "Should have failed with existing directory"
+            exit 1
+          } catch {
+            # Expected to fail
+          }
+        shell: powershell
+
   release:
     name: Release
     runs-on: ubuntu-latest
@@ -161,7 +249,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
