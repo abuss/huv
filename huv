@@ -368,10 +368,9 @@ class HierarchicalUV:
         pyvenv_cfg = venv_path / "pyvenv.cfg"
         if pyvenv_cfg.exists():
             with open(pyvenv_cfg, "a") as f:
-                parent_path_safe = self._get_safe_path_string(
-                    parent_path, for_windows_script=False
-                )
-                f.write(f"huv_parent = {parent_path_safe}\n")
+                # For pyvenv.cfg, use the original path format (no safe conversion needed)
+                # since this is file content, not f-string embedding
+                f.write(f"huv_parent = {parent_path}\n")
 
         if self.is_windows:
             self._modify_windows_batch_activate(venv_path, parent_path)
