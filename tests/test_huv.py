@@ -35,7 +35,10 @@ class TestHuv(unittest.TestCase):
 
     def run_huv(self, args, expect_success=True):
         """Run huv command and return result"""
-        cmd = [str(self.huv_path)] + args
+        if platform.system() == "Windows":
+            cmd = [sys.executable, str(self.huv_path)] + args
+        else:
+            cmd = [str(self.huv_path)] + args
         result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.test_dir)
 
         if expect_success and result.returncode != 0:
@@ -304,7 +307,10 @@ class TestHuvIntegration(unittest.TestCase):
 
     def run_huv(self, args, expect_success=True):
         """Run huv command and return result"""
-        cmd = [str(self.huv_path)] + args
+        if platform.system() == "Windows":
+            cmd = [sys.executable, str(self.huv_path)] + args
+        else:
+            cmd = [str(self.huv_path)] + args
         result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.test_dir)
 
         if expect_success and result.returncode != 0:
