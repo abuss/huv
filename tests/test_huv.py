@@ -130,7 +130,9 @@ class TestHuv(unittest.TestCase):
         with open(activate_script) as f:
             content = f.read()
             self.assertIn("PARENT_VENV_PATH", content)
-            self.assertIn(str(parent_path.resolve()), content)
+            # Convert path to the format used in activation scripts (forward slashes for Unicode safety)
+            expected_path = str(parent_path.resolve()).replace("\\", "/")
+            self.assertIn(expected_path, content)
 
     def test_python_version_inheritance(self):
         """Test that child environments inherit parent Python version"""
@@ -470,7 +472,9 @@ class TestHuvIntegration(unittest.TestCase):
                     content = f.read()
                     # Should contain PYTHONPATH modification with Unix path separators
                     self.assertIn("PYTHONPATH", content)
-                    self.assertIn(str(parent_path.resolve()), content)
+                    # Convert path to the format used in activation scripts (forward slashes for Unicode safety)
+                    expected_path = str(parent_path.resolve()).replace("\\", "/")
+                    self.assertIn(expected_path, content)
 
     def test_cross_platform_package_inheritance(self):
         """Test that package inheritance works correctly across platforms"""
