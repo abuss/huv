@@ -86,36 +86,30 @@ class HierarchicalUV:
             return venv_path / "bin" / "python"
 
     def _get_safe_path_string(
-        self, path: Union[str, Path], for_windows_script: bool = False
+        self, path_obj: Union[str, Path], for_windows_script: bool = False
     ) -> str:
         """
-        Get a safe, platform-appropriate string representation of a path.
+        Convert a path to a safe string representation that won't cause Unicode escape issues.
 
-        This method provides cross-platform path handling for embedding paths
-        in shell scripts and configuration files.
+        On Windows, backslashes in paths can cause Unicode escape sequence errors when used
+        in f-strings (e.g., \\U, \\n, \\r, \\t). This method ensures all paths use forward
+        slashes to prevent these issues.
 
         Args:
-            path (str|Path): The path to convert
-            for_windows_script (bool): If True, escape backslashes for Windows batch/PowerShell
+            path_obj: Path object or string to convert
+            for_windows_script: Whether this path will be used in Windows batch/PowerShell scripts
 
         Returns:
-            str: A safe string representation of the path
+            str: Safe path string with forward slashes
         """
-        path_obj = Path(path)
+        if isinstance(path_obj, str):
+            path_obj = Path(path_obj)
 
-        if for_windows_script:
-            # For Windows batch files and PowerShell, we need proper escaping
-            # Always use forward slashes to avoid Unicode escape issues
-            path_str = str(path_obj)
-            # Convert backslashes to forward slashes for Windows scripts
-            # This prevents Unicode escape sequence errors when paths contain \U, \n, etc.
-            return path_str.replace("\\", "/")
-        else:
-            # For general use, also convert backslashes to avoid Unicode escape issues
-            # in f-strings and print statements
-            path_str = str(path_obj)
-            # On Windows paths, replace backslashes to prevent Unicode escape errors
-            return path_str.replace("\\", "/")
+        # Get the path as a string and ensure forward slashes to prevent Unicode escapes
+        # Note: as_posix() doesn't convert backslashes that are already in the path string,
+        # so we need to manually replace them for Unicode escape safety
+        path_str = str(path_obj)
+        return path_str.replace("\\", "/")
 
     def _find_uv(self) -> str:
         """
@@ -335,10 +329,8 @@ class HierarchicalUV:
             print(f"[OK] Hierarchy configured with parent: {parent_path_str}")
             if self.is_windows:
                 activate_path = Path(venv_path) / "Scripts" / "activate.bat"
-                activate_path_str = self._get_safe_path_string(
-                    activate_path, for_windows_script=False
-                )
-                print(f"  Use: {activate_path_str}")
+                # For Windows display, use string concatenation to avoid f-string Unicode issues
+                print("  Use: " + str(activate_path))
             else:
                 venv_path_str = self._get_safe_path_string(
                     venv_path, for_windows_script=False
