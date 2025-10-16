@@ -90,7 +90,7 @@ class TestHuv(unittest.TestCase):
         with open(activate_script) as f:
             content = f.read()
             self.assertIn("PARENT_VENV_PATH", content)
-            self.assertIn(str(parent_path), content)
+            self.assertIn(str(parent_path.resolve()), content)
 
     def test_python_version_inheritance(self):
         """Test that child environments inherit parent Python version"""
@@ -409,7 +409,7 @@ class TestHuvIntegration(unittest.TestCase):
         with open(child_cfg) as f:
             content = f.read()
             self.assertIn("huv_parent", content)
-            self.assertIn(str(parent_path), content)
+            self.assertIn(str(parent_path.resolve()), content)
 
         # Check that activation scripts are modified correctly for current platform
         is_windows = platform.system() == "Windows"
@@ -430,7 +430,7 @@ class TestHuvIntegration(unittest.TestCase):
                     content = f.read()
                     # Should contain PYTHONPATH modification with Unix path separators
                     self.assertIn("PYTHONPATH", content)
-                    self.assertIn(str(parent_path), content)
+                    self.assertIn(str(parent_path.resolve()), content)
 
     def test_cross_platform_package_inheritance(self):
         """Test that package inheritance works correctly across platforms"""
@@ -481,7 +481,8 @@ class TestHuvIntegration(unittest.TestCase):
         child_cfg = child_path / "pyvenv.cfg"
         with open(child_cfg) as f:
             content = f.read()
-            self.assertIn(str(parent_path), content)
+            # Use resolved path for comparison since that's what gets written to pyvenv.cfg
+            self.assertIn(str(parent_path.resolve()), content)
 
 
 if __name__ == "__main__":
