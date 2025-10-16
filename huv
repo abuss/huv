@@ -278,9 +278,9 @@ class HierarchicalUV:
                 )
                 sys.exit(1)
 
-        print(f"✓ Virtual environment created successfully at: {venv_path}")
+        print(f"[OK] Virtual environment created successfully at: {venv_path}")
         if parent_path:
-            print(f"✓ Hierarchy configured with parent: {parent_path}")
+            print(f"[OK] Hierarchy configured with parent: {parent_path}")
             if self.is_windows:
                 print(f"  Use: {venv_path}\\Scripts\\activate.bat")
             else:
@@ -1281,7 +1281,7 @@ sys.path[:0] = new_paths
                         skipped_packages.append(pkg_name)
                     else:
                         print(
-                            f"⚠️  Parent has '{pkg_name}' v{available_version}, but need {constraint}"
+                            f"[WARNING] Parent has '{pkg_name}' v{available_version}, but need {constraint}"
                         )
                         packages_to_install.append(pkg_spec)
                         version_conflicts.append(
@@ -1306,7 +1306,7 @@ sys.path[:0] = new_paths
                     packages_to_install.append(dep_name)
 
             if version_conflicts:
-                print("\n⚠️  Version conflicts detected:")
+                print("\n[WARNING] Version conflicts detected:")
                 for conflict in version_conflicts:
                     print(f"   {conflict}")
                 print(
@@ -1315,7 +1315,7 @@ sys.path[:0] = new_paths
 
         else:
             # Fallback to original logic if dry-run fails
-            print("⚠️  Could not analyze dependencies, using basic package checking")
+            print("[WARNING] Could not analyze dependencies, using basic package checking")
             packages_to_install = []
             skipped_packages = []
 
@@ -1376,7 +1376,7 @@ sys.path[:0] = new_paths
 
         except subprocess.CalledProcessError as e:
             print(
-                f"❌ Installation failed with exit code {e.returncode}", file=sys.stderr
+                f"[ERROR] Installation failed with exit code {e.returncode}", file=sys.stderr
             )
             sys.exit(e.returncode)
 
@@ -1430,11 +1430,11 @@ sys.path[:0] = new_paths
 
         if not_found:
             print(
-                f"⚠️  Packages not installed in current environment: {', '.join(not_found)}"
+                f"[WARNING] Packages not installed in current environment: {', '.join(not_found)}"
             )
 
         if not packages_to_remove:
-            print("❌ No packages to uninstall from current environment.")
+            print("[ERROR] No packages to uninstall from current environment.")
             return
 
         print(
@@ -1458,7 +1458,7 @@ sys.path[:0] = new_paths
             print("✅ Uninstallation completed successfully.")
         except subprocess.CalledProcessError as e:
             print(
-                f"❌ Uninstallation failed with exit code {e.returncode}",
+                f"[ERROR] Uninstallation failed with exit code {e.returncode}",
                 file=sys.stderr,
             )
             sys.exit(e.returncode)
@@ -1483,7 +1483,7 @@ sys.path[:0] = new_paths
             # This ensures that uv gets the exact same environment and signal handling
             os.execvp(self.uv_executable, cmd)
         except OSError as e:
-            print(f"❌ Failed to execute uv: {e}", file=sys.stderr)
+            print(f"[ERROR] Failed to execute uv: {e}", file=sys.stderr)
             sys.exit(1)
 
 
