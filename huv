@@ -209,14 +209,16 @@ class HierarchicalUV:
         if parent_path:
             parent_path = Path(parent_path).resolve()
             if not parent_path.exists():
+                parent_path_str = self._get_safe_path_string(parent_path, for_windows_script=False)
                 print(
-                    f"Error: Parent environment '{parent_path}' does not exist.",
+                    f"Error: Parent environment '{parent_path_str}' does not exist.",
                     file=sys.stderr,
                 )
                 sys.exit(1)
             if not (parent_path / "pyvenv.cfg").exists():
+                parent_path_str = self._get_safe_path_string(parent_path, for_windows_script=False)
                 print(
-                    f"Error: '{parent_path}' is not a valid virtual environment.",
+                    f"Error: '{parent_path_str}' is not a valid virtual environment.",
                     file=sys.stderr,
                 )
                 sys.exit(1)
@@ -224,8 +226,9 @@ class HierarchicalUV:
             # Check for activation script based on platform
             activate_script = self._get_activation_script_path(parent_path)
             if not activate_script.exists():
+                parent_path_str = self._get_safe_path_string(parent_path, for_windows_script=False)
                 print(
-                    f"Error: Parent environment '{parent_path}' is missing activate script.",
+                    f"Error: Parent environment '{parent_path_str}' is missing activate script.",
                     file=sys.stderr,
                 )
                 sys.exit(1)
@@ -280,7 +283,8 @@ class HierarchicalUV:
 
         print(f"Creating virtual environment: {venv_path}")
         if parent_path:
-            print(f"Parent environment: {parent_path}")
+            parent_path_str = self._get_safe_path_string(parent_path, for_windows_script=False)
+            print(f"Parent environment: {parent_path_str}")
 
         try:
             subprocess.run(cmd, check=True)
@@ -299,7 +303,8 @@ class HierarchicalUV:
 
         # If parent is specified, modify activation scripts
         if parent_path:
-            print(f"Setting up hierarchy with parent: {parent_path}")
+            parent_path_str = self._get_safe_path_string(parent_path, for_windows_script=False)
+            print(f"Setting up hierarchy with parent: {parent_path_str}")
             try:
                 self._setup_hierarchy(venv_path, parent_path)
             except Exception as e:
@@ -312,9 +317,11 @@ class HierarchicalUV:
 
         print(f"[OK] Virtual environment created successfully at: {venv_path}")
         if parent_path:
-            print(f"[OK] Hierarchy configured with parent: {parent_path}")
+            parent_path_str = self._get_safe_path_string(parent_path, for_windows_script=False)
+            print(f"[OK] Hierarchy configured with parent: {parent_path_str}")
             if self.is_windows:
-                print(f"  Use: {venv_path}\\Scripts\\activate.bat")
+                activate_path = Path(venv_path) / "Scripts" / "activate.bat"
+                print(f"  Use: {activate_path}")
             else:
                 print(f"  Use: source {venv_path}/bin/activate")
 
@@ -341,7 +348,8 @@ class HierarchicalUV:
         pyvenv_cfg = venv_path / "pyvenv.cfg"
         if pyvenv_cfg.exists():
             with open(pyvenv_cfg, "a") as f:
-                f.write(f"huv_parent = {parent_path}\n")
+                parent_path_safe = self._get_safe_path_string(parent_path, for_windows_script=False)
+                f.write(f"huv_parent = {parent_path_safe}\n")
 
         if self.is_windows:
             self._modify_windows_batch_activate(venv_path, parent_path)
