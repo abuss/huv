@@ -444,11 +444,11 @@ class TestHuvIntegration(unittest.TestCase):
         # Install a simple package in parent
         is_windows = platform.system() == "Windows"
         if is_windows:
-            activate_cmd = f"{parent_path}\\Scripts\\activate.bat"
-            python_cmd = f"{parent_path}\\Scripts\\python.exe"
+            activate_cmd = str(parent_path / "Scripts" / "activate.bat")
+            python_cmd = str(parent_path / "Scripts" / "python.exe")
         else:
             activate_cmd = f"source {parent_path}/bin/activate"
-            python_cmd = f"{parent_path}/bin/python"
+            python_cmd = str(parent_path / "bin" / "python")
 
         # Install requests in parent (using uv pip directly to avoid complexity)
         install_result = subprocess.run(
