@@ -85,6 +85,38 @@ class HierarchicalUV:
         else:
             return venv_path / "bin" / "python"
 
+    def _get_safe_path_string(
+        self, path: Union[str, Path], for_windows_script: bool = False
+    ) -> str:
+        """
+        Get a safe, platform-appropriate string representation of a path.
+
+        This method provides cross-platform path handling for embedding paths
+        in shell scripts and configuration files.
+
+        Args:
+            path (str|Path): The path to convert
+            for_windows_script (bool): If True, escape backslashes for Windows batch/PowerShell
+
+        Returns:
+            str: A safe string representation of the path
+        """
+        path_obj = Path(path)
+
+        if for_windows_script:
+            # For Windows batch files and PowerShell, we need proper escaping
+            # Use forward slashes for PowerShell (which accepts both) and
+            # double backslashes for batch files
+            if self.is_windows:
+                # Use as_posix() to get forward slashes, which work in both batch and PS
+                return path_obj.as_posix()
+            else:
+                # On Unix systems, just return the string representation
+                return str(path_obj)
+        else:
+            # For general use, return appropriate format for the platform
+            return str(path_obj)
+
     def _find_uv(self) -> str:
         """
         Find the uv executable in the system PATH.
@@ -625,9 +657,13 @@ endif
             content = f.read()
 
         # Add hierarchy support for Windows batch - Windows uses semicolon as path separator
+        # Use safe path helper for cross-platform compatibility
+        parent_path_safe = self._get_safe_path_string(
+            parent_path, for_windows_script=True
+        )
         hierarchy_code = f"""
 @REM Hierarchical environment support - include parent libraries
-@set "PARENT_VENV_PATH={parent_path}"
+@set "PARENT_VENV_PATH={parent_path_safe}"
 @if exist "%PARENT_VENV_PATH%" (
     @REM Store old PYTHONPATH
     @if defined PYTHONPATH (
@@ -635,7 +671,7 @@ endif
     )
 
     @REM Add parent site-packages to PYTHONPATH
-    @for /d %%i in ("%PARENT_VENV_PATH%\\Lib\\site-packages") do (
+    @for /d %%i in ("%PARENT_VENV_PATH%/Lib/site-packages") do (
         @if exist "%%i" (
             @if not defined PYTHONPATH (
                 @set "PYTHONPATH=%%i"
@@ -678,10 +714,13 @@ endif
 
         # Add hierarchy support for PowerShell
         if self.is_windows:
-            # Windows PowerShell paths
+            # Windows PowerShell paths - use safe path helper for cross-platform compatibility
+            parent_path_safe = self._get_safe_path_string(
+                parent_path, for_windows_script=True
+            )
             hierarchy_code = f'''
 # Hierarchical environment support - include parent libraries
-$PARENT_VENV_PATH = "{parent_path}"
+$PARENT_VENV_PATH = "{parent_path_safe}"
 if (Test-Path $PARENT_VENV_PATH) {{
     # Store old PYTHONPATH
     if ($env:PYTHONPATH) {{
@@ -689,7 +728,7 @@ if (Test-Path $PARENT_VENV_PATH) {{
     }}
 
     # Add parent site-packages to PYTHONPATH (Windows uses semicolon separator)
-    $parentSites = Get-ChildItem "$PARENT_VENV_PATH\\Lib\\site-packages" -Directory 2>$null
+    $parentSites = Get-ChildItem "$PARENT_VENV_PATH/Lib/site-packages" -Directory 2>$null
     foreach ($parentSite in $parentSites) {{
         if (!$env:PYTHONPATH) {{
             $env:PYTHONPATH = $parentSite.FullName
@@ -702,9 +741,12 @@ if (Test-Path $PARENT_VENV_PATH) {{
 '''
         else:
             # Unix PowerShell paths
+            parent_path_safe = self._get_safe_path_string(
+                parent_path, for_windows_script=False
+            )
             hierarchy_code = f'''
 # Hierarchical environment support - include parent libraries
-$PARENT_VENV_PATH = "{parent_path}"
+$PARENT_VENV_PATH = "{parent_path_safe}"
 if (Test-Path $PARENT_VENV_PATH) {{
     # Store old PYTHONPATH
     if ($env:PYTHONPATH) {{
@@ -1315,7 +1357,9 @@ sys.path[:0] = new_paths
 
         else:
             # Fallback to original logic if dry-run fails
-            print("[WARNING] Could not analyze dependencies, using basic package checking")
+            print(
+                "[WARNING] Could not analyze dependencies, using basic package checking"
+            )
             packages_to_install = []
             skipped_packages = []
 
@@ -1376,7 +1420,8 @@ sys.path[:0] = new_paths
 
         except subprocess.CalledProcessError as e:
             print(
-                f"[ERROR] Installation failed with exit code {e.returncode}", file=sys.stderr
+                f"[ERROR] Installation failed with exit code {e.returncode}",
+                file=sys.stderr,
             )
             sys.exit(e.returncode)
 
