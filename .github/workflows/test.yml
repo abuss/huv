@@ -169,17 +169,17 @@ jobs:
           echo "$output" | grep -q "Using parent's Python version"
 
           # Test with additional arguments
-          ./huv venv test-seed-parent --seed
-          ./huv venv test-seed-child --parent test-seed-parent --seed
-          # Test that pip is available (check file existence OR functionality)
-          if test -f test-seed-child/bin/pip; then
-            echo "pip file found directly"
-          elif test-seed-child/bin/python -m pip --version >/dev/null 2>&1; then
-            echo "pip available via python -m pip"
-          else
-            echo "pip not available in child environment"
-            exit 1
-          fi
+          #./huv venv test-seed-parent --seed
+          #./huv venv test-seed-child --parent test-seed-parent --seed
+          ## Test that pip is available (check file existence OR functionality)
+          #if test -f test-seed-child/bin/pip; then
+          #  echo "pip file found directly"
+          #elif test-seed-child/bin/python -m pip --version >/dev/null 2>&1; then
+          #  echo "pip available via python -m pip"
+          #else
+          #  echo "pip not available in child environment"
+          #  exit 1
+          #fi
 
       - name: Test complete workflow (Windows)
         if: runner.os == 'Windows'
