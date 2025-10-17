@@ -474,7 +474,7 @@ class TestHuvIntegration(unittest.TestCase):
         child_result = self.run_huv(["venv", child_name, "--parent", parent_name])
         child_path = self.test_dir / child_name
         self.assertTrue(child_path.exists())
-        child_result = self.run_huv(["venv", child_name, "--parent", parent_name])
+
         # Check that huv_parent is written to pyvenv.cfg
         child_cfg = child_path / "pyvenv.cfg"
         self.assertTrue(child_cfg.exists())
