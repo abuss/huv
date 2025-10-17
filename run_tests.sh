@@ -18,7 +18,7 @@ chmod +x huv
 
 # Run basic functionality test
 echo "Testing basic functionality..."
-python tests/test_huv.py
+PYTHONPATH=. python -m tests.test_huv
 
 # Run manual integration tests
 echo "Running integration tests..."
@@ -44,9 +44,16 @@ if [ ! -d "test-child" ]; then
     exit 1
 fi
 
-# Check hierarchy setup
-if ! grep -q "PARENT_VENV_PATH" test-child/bin/activate; then
-    echo "ERROR: Hierarchy not properly set up in activate script"
+# Check hierarchy setup in pyvenv.cfg and _virtualenv.py
+if ! grep -q "huv_parent =" test-child/pyvenv.cfg; then
+    echo "ERROR: Hierarchy not properly configured in pyvenv.cfg"
+    exit 1
+fi
+
+# Find the _virtualenv.py file in the appropriate Python version directory
+VIRTUALENV_PY_PATH=$(find test-child/lib -name "_virtualenv.py" -type f | head -1)
+if [ -z "$VIRTUALENV_PY_PATH" ] || ! grep -q "_setup_huv_hierarchy" "$VIRTUALENV_PY_PATH"; then
+    echo "ERROR: Hierarchy not properly set up in _virtualenv.py"
     exit 1
 fi
 

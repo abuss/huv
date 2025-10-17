@@ -31,6 +31,138 @@ from pathlib import Path
 from typing import Dict, List, Union
 
 
+class DynamicArgumentParser:
+    """
+    Dynamic argument parser that queries 'uv venv --help' to build argument definitions.
+
+    This allows huv to automatically support all current and future uv venv options
+    without manual maintenance of argument definitions.
+    """
+
+    def __init__(self, uv_executable: str = "uv"):
+        """Initialize the dynamic parser."""
+        self.uv_executable = uv_executable
+        self._cached_parser = None
+        self._cached_help_output = None
+
+    def _get_uv_help_output(self) -> str:
+        """Get the output of 'uv venv --help'."""
+        if self._cached_help_output is None:
+            try:
+                result = subprocess.run(
+                    [self.uv_executable, "venv", "--help"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                self._cached_help_output = result.stdout
+            except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                raise RuntimeError(f"Failed to get uv venv help: {e}")
+        return self._cached_help_output
+
+    def _parse_argument_from_line(self, line: str) -> Dict[str, any] | None:
+        """Parse a single argument line from uv help output."""
+        line = line.strip()
+        if not line.startswith("-"):
+            return None
+
+        # Pattern for: -s, --long-option <ARG>  or  --long-option <ARG>  or  --flag
+        arg_pattern = r"^(?:(-\w),?\s*)?(-{2}[\w-]+)(?:\s+<([^>]+)>)?"
+        match = re.match(arg_pattern, line)
+
+        if not match:
+            return None
+
+        short_flag, long_flag, arg_type = match.groups()
+
+        arg_info = {
+            "dest": long_flag[2:].replace("-", "_"),  # --my-option -> my_option
+            "long": long_flag,
+            "takes_value": arg_type is not None,
+        }
+
+        if short_flag:
+            arg_info["short"] = short_flag
+
+        if arg_type:
+            arg_info["metavar"] = arg_type
+
+        # Detect if it's a repeatable option (action='append')
+        if "URLs" in line or "locations" in line.lower() or "files" in line.lower():
+            arg_info["action"] = "append"
+        elif not arg_info["takes_value"]:
+            arg_info["action"] = "store_true"
+
+        return arg_info
+
+    def _create_argument_parser(self) -> argparse.ArgumentParser:
+        """Create an ArgumentParser based on uv venv help output."""
+        help_output = self._get_uv_help_output()
+
+        parser = argparse.ArgumentParser(
+            description="Create a virtual environment with hierarchy support",
+            add_help=False,  # We'll handle help ourselves
+        )
+
+        # Add positional argument for path
+        parser.add_argument(
+            "path", nargs="?", help="The path to the virtual environment to create"
+        )
+
+        # Add huv-specific --parent argument
+        parser.add_argument(
+            "--parent", help="Parent virtual environment path for hierarchy"
+        )
+
+        # Parse the help output to extract argument definitions
+        in_options = False
+        for line in help_output.split("\n"):
+            if line.strip().startswith("Options:"):
+                in_options = True
+                continue
+            elif line.strip().endswith("options:") and in_options:
+                # Stop when we hit a new section like "Python options:"
+                break
+            elif in_options and line.strip().startswith("-"):
+                arg_info = self._parse_argument_from_line(line)
+                if arg_info:
+                    # Build arguments for add_argument
+                    args = []
+                    if arg_info.get("short"):
+                        args.append(arg_info["short"])
+                    args.append(arg_info["long"])
+
+                    kwargs = {"dest": arg_info["dest"]}
+
+                    if arg_info.get("action"):
+                        kwargs["action"] = arg_info["action"]
+
+                    if arg_info.get("metavar"):
+                        kwargs["metavar"] = arg_info["metavar"]
+
+                    # Add the argument to parser
+                    try:
+                        parser.add_argument(*args, **kwargs)
+                    except argparse.ArgumentError:
+                        # Skip if argument already exists or conflicts
+                        pass
+
+        return parser
+
+    def parse_args(self, args: List[str]) -> argparse.Namespace:
+        """Parse arguments using the dynamic parser."""
+        if self._cached_parser is None:
+            self._cached_parser = self._create_argument_parser()
+
+        # Split known and unknown args to allow passthrough
+        known_args, unknown_args = self._cached_parser.parse_known_args(args)
+
+        # Store unknown args for passthrough to uv
+        known_args.unknown_args = unknown_args
+
+        return known_args
+
+
 class HierarchicalUV:
     """
     Main class for managing hierarchical virtual environments with uv.
@@ -340,624 +472,142 @@ class HierarchicalUV:
     def _setup_hierarchy(
         self, venv_path: Union[str, Path], parent_path: Union[str, Path]
     ) -> None:
-        """Modify activation scripts to support hierarchy
+        """Setup hierarchy by modifying _virtualenv.py for automatic parent inheritance
 
         Args:
             venv_path (str or Path): Path to the child virtual environment.
             parent_path (str or Path): Path to the parent virtual environment.
 
         Behavior:
-            - Modifies activation scripts for all shells to include parent environment logic.
-            - Modifies the Python 'activate_this.py' script for hierarchical activation.
-            - Handles Windows and Unix activation scripts appropriately.
             - Writes parent information to pyvenv.cfg
+            - Modifies _virtualenv.py to set up sys.path hierarchy automatically
+            - No activation script modifications needed - inheritance works immediately
 
         """
         venv_path = Path(venv_path)
         parent_path = Path(parent_path)
+        parent_venv_path = str(parent_path.resolve())
 
         # Write parent information to pyvenv.cfg
         pyvenv_cfg = venv_path / "pyvenv.cfg"
         if pyvenv_cfg.exists():
             with open(pyvenv_cfg, "a") as f:
-                # For pyvenv.cfg, use the original path format (no safe conversion needed)
-                # since this is file content, not f-string embedding
-                f.write(f"huv_parent = {parent_path}\n")
+                f.write(f"huv_parent = {parent_venv_path}\n")
 
-        if self.is_windows:
-            self._modify_windows_batch_activate(venv_path, parent_path)
-            self._modify_powershell_activate(venv_path, parent_path)
+        # Modify _virtualenv.py to include hierarchy support
+        virtualenv_py_path = self._get_virtualenv_py_path(venv_path)
+        if virtualenv_py_path and virtualenv_py_path.exists():
+            self._modify_virtualenv_py(virtualenv_py_path)
         else:
-            self._modify_bash_activate(venv_path, parent_path)
-            self._modify_fish_activate(venv_path, parent_path)
-            self._modify_csh_activate(venv_path, parent_path)
+            raise FileNotFoundError(f"Could not find _virtualenv.py in {venv_path}")
 
-        # These are available on both platforms
-        self._modify_nushell_activate(venv_path, parent_path)
-        self._modify_activate_this_py(venv_path, parent_path)
-
-    def _modify_bash_activate(
-        self, venv_path: Union[str, Path], parent_path: Union[str, Path]
-    ) -> None:
-        """Modify the bash activate script"""
+    def _get_virtualenv_py_path(self, venv_path: Union[str, Path]) -> Path:
+        """Get the path to _virtualenv.py in the virtual environment."""
         venv_path = Path(venv_path)
-        parent_path = Path(parent_path)
-        activate_script = venv_path / "bin" / "activate"
 
-        if not activate_script.exists():
-            print(f"Warning: Bash activate script not found at {activate_script}")
-            return
+        # Try common locations for _virtualenv.py
+        if self.is_windows:
+            site_packages = venv_path / "Lib" / "site-packages"
+        else:
+            # Find the python version directory
+            lib_dir = venv_path / "lib"
+            if lib_dir.exists():
+                python_dirs = list(lib_dir.glob("python*"))
+                if python_dirs:
+                    site_packages = python_dirs[0] / "site-packages"
+                else:
+                    # Fallback
+                    site_packages = lib_dir / "python3.12" / "site-packages"
+            else:
+                raise FileNotFoundError(f"Could not find lib directory in {venv_path}")
 
-        # Read the original script
-        with open(activate_script) as f:
+        virtualenv_py = site_packages / "_virtualenv.py"
+        return virtualenv_py
+
+    def _modify_virtualenv_py(self, virtualenv_py_path: Path) -> None:
+        """Modify _virtualenv.py to include hierarchy support."""
+
+        # Read the current content
+        with open(virtualenv_py_path) as f:
             content = f.read()
 
-        # Find the deactivate function and add PYTHONPATH restoration
-        deactivate_insertion = """    if ! [ -z "${_OLD_VIRTUAL_PYTHONHOME+_}" ] ; then
-        PYTHONHOME="$_OLD_VIRTUAL_PYTHONHOME"
-        export PYTHONHOME
-        unset _OLD_VIRTUAL_PYTHONHOME
-    fi
-    if ! [ -z "${_OLD_VIRTUAL_PYTHONPATH+_}" ] ; then
-        PYTHONPATH="$_OLD_VIRTUAL_PYTHONPATH"
-        export PYTHONPATH
-        unset _OLD_VIRTUAL_PYTHONPATH
-    elif [ ! -z "${PYTHONPATH+_}" ] ; then
-        unset PYTHONPATH
-    fi"""
+        # Check if already modified
+        if "# huv hierarchy support" in content:
+            return  # Already modified
 
-        # Replace the PYTHONHOME section in deactivate function
-        old_pythonhome_section = """    if ! [ -z "${_OLD_VIRTUAL_PYTHONHOME+_}" ] ; then
-        PYTHONHOME="$_OLD_VIRTUAL_PYTHONHOME"
-        export PYTHONHOME
-        unset _OLD_VIRTUAL_PYTHONHOME
-    fi"""
+        # Add hierarchy setup code at the end
+        hierarchy_code = '''
 
-        content = content.replace(old_pythonhome_section, deactivate_insertion)
+# huv hierarchy support - automatically set up parent environment inheritance
+def _setup_huv_hierarchy():
+    """Set up hierarchical virtual environment support by modifying sys.path."""
+    import os
+    import sys
+    import glob
+    from pathlib import Path
 
-        # Add hierarchical support at the end
-        if self.is_windows:
-            # When running on Windows, parent paths need to use Windows structure
-            # Use safe path helper for cross-platform compatibility
-            parent_path_safe = self._get_safe_path_string(
-                parent_path, for_windows_script=False
-            )
-            hierarchy_code = f'''
-# Hierarchical environment support - include parent libraries
-PARENT_VENV_PATH="{parent_path_safe}"
-if [ -d "$PARENT_VENV_PATH" ]; then
-    # Store old PYTHONPATH
-    if ! [ -z "${{PYTHONPATH+_}}" ] ; then
-        _OLD_VIRTUAL_PYTHONPATH="$PYTHONPATH"
-    fi
+    # Read pyvenv.cfg to find parent environment
+    venv_root = Path(sys.prefix)
+    pyvenv_cfg = venv_root / "pyvenv.cfg"
 
-    # Add parent site-packages to PYTHONPATH (Windows structure: Lib/site-packages)
-    # Use find to locate site-packages directories to avoid shell glob issues
-    for parent_site in "$PARENT_VENV_PATH"/Lib/site-packages; do
-        if [ -d "$parent_site" ]; then
-            if [ -z "${{PYTHONPATH+_}}" ]; then
-                PYTHONPATH="$parent_site"
-            else
-                PYTHONPATH="$PYTHONPATH:$parent_site"
-            fi
-        fi
-    done
-    if [ ! -z "${{PYTHONPATH+_}}" ]; then
-        export PYTHONPATH
-    fi
-fi
+    if not pyvenv_cfg.exists():
+        return
 
-'''
-        else:
-            # Unix paths - use safe path helper for consistency
-            parent_path_safe = self._get_safe_path_string(
-                parent_path, for_windows_script=False
-            )
-            hierarchy_code = f'''
-# Hierarchical environment support - include parent libraries
-PARENT_VENV_PATH="{parent_path_safe}"
-if [ -d "$PARENT_VENV_PATH" ]; then
-    # Store old PYTHONPATH
-    if ! [ -z "${{PYTHONPATH+_}}" ] ; then
-        _OLD_VIRTUAL_PYTHONPATH="$PYTHONPATH"
-    fi
+    parent_path = None
+    with open(pyvenv_cfg, 'r') as f:
+        for line in f:
+            if line.startswith("huv_parent = "):
+                parent_path = line.split("= ", 1)[1].strip()
+                break
 
-    # Add parent site-packages to PYTHONPATH (appended, so child takes precedence)
-    # Use find to locate site-packages directories to avoid shell glob issues
-    for parent_site in "$PARENT_VENV_PATH"/lib/python*/site-packages; do
-        if [ -d "$parent_site" ]; then
-            if [ -z "${{PYTHONPATH+_}}" ]; then
-                PYTHONPATH="$parent_site"
-            else
-                PYTHONPATH="$PYTHONPATH:$parent_site"
-            fi
-        fi
-    done
-    if [ ! -z "${{PYTHONPATH+_}}" ]; then
-        export PYTHONPATH
-    fi
-fi
+    if not parent_path or not os.path.exists(parent_path):
+        return
 
+    # Find parent site-packages directories
+    parent_site_packages = []
+    if os.name == 'nt':  # Windows
+        parent_site_dir = os.path.join(parent_path, "Lib", "site-packages")
+        if os.path.exists(parent_site_dir):
+            parent_site_packages.append(parent_site_dir)
+    else:  # Unix-like
+        parent_lib_pattern = os.path.join(parent_path, "lib", "python*", "site-packages")
+        parent_site_packages.extend(glob.glob(parent_lib_pattern))
+
+    if not parent_site_packages:
+        return
+
+    # Find current venv site-packages in sys.path
+    current_venv_paths = []
+    for path in sys.path:
+        if sys.prefix in path and "site-packages" in path:
+            current_venv_paths.append(path)
+
+    # Insert parent site-packages after current venv paths
+    # This ensures child packages take precedence over parent packages
+    for parent_site in parent_site_packages:
+        if parent_site not in sys.path:
+            if current_venv_paths:
+                # Insert after the last current venv site-packages
+                insert_idx = sys.path.index(current_venv_paths[-1]) + 1
+                sys.path.insert(insert_idx, parent_site)
+            else:
+                # No current venv paths found, append
+                sys.path.append(parent_site)
+
+# Set up hierarchy automatically when _virtualenv.py is imported
+try:
+    _setup_huv_hierarchy()
+except Exception:
+    # Silently ignore errors to avoid breaking virtual environment startup
+    pass
 '''
 
-        # Insert before the final hash command
-        hash_line = "hash -r 2>/dev/null || true"
-        content = content.replace(hash_line, hierarchy_code + hash_line)
-
-        # Write the modified script
-        with open(activate_script, "w") as f:
-            f.write(content)
-
-    def _modify_fish_activate(
-        self, venv_path: Union[str, Path], parent_path: Union[str, Path]
-    ) -> None:
-        """Modify the Fish activate script"""
-        venv_path = Path(venv_path)
-        parent_path = Path(parent_path)
-        activate_script = venv_path / "bin" / "activate.fish"
-
-        if not activate_script.exists():
-            print(f"Warning: Fish activate script not found at {activate_script}")
-            return
-
-        # Read the original script
-        with open(activate_script) as f:
-            content = f.read()
-
-        # Add hierarchy support for Fish shell
-        if self.is_windows:
-            # Windows paths for Fish - use safe path helper for cross-platform compatibility
-            parent_path_safe = self._get_safe_path_string(
-                parent_path, for_windows_script=False
-            )
-            hierarchy_code = f'''
-# Hierarchical environment support - include parent libraries
-set PARENT_VENV_PATH "{parent_path_safe}"
-if test -d "$PARENT_VENV_PATH"
-    # Store old PYTHONPATH
-    if set -q PYTHONPATH
-        set -gx _OLD_VIRTUAL_PYTHONPATH $PYTHONPATH
-    end
-
-    # Add parent site-packages to PYTHONPATH (Windows structure)
-    for parent_site in "$PARENT_VENV_PATH"/Lib/site-packages
-        if test -d "$parent_site"
-            if not set -q PYTHONPATH
-                set -gx PYTHONPATH "$parent_site"
-            else
-                set -gx PYTHONPATH "$PYTHONPATH:$parent_site"
-            end
-        end
-    end
-end
-
-'''
-        else:
-            # Unix paths for Fish - use safe path helper for consistency
-            parent_path_safe = self._get_safe_path_string(
-                parent_path, for_windows_script=False
-            )
-            hierarchy_code = f'''
-# Hierarchical environment support - include parent libraries
-set PARENT_VENV_PATH "{parent_path_safe}"
-if test -d "$PARENT_VENV_PATH"
-    # Store old PYTHONPATH
-    if set -q PYTHONPATH
-        set -gx _OLD_VIRTUAL_PYTHONPATH $PYTHONPATH
-    end
-
-    # Add parent site-packages to PYTHONPATH (appended, so child takes precedence)
-    for parent_site in "$PARENT_VENV_PATH"/lib/python*/site-packages
-        if test -d "$parent_site"
-            if not set -q PYTHONPATH
-                set -gx PYTHONPATH "$parent_site"
-            else
-                set -gx PYTHONPATH "$PYTHONPATH:$parent_site"
-            end
-        end
-    end
-end
-
-'''
-
-        # Insert before the final function end
-        content = content.replace("end\n", hierarchy_code + "end\n")
-
-        # Add PYTHONPATH restoration to deactivate function
-        deactivate_section = """    if set -q _OLD_VIRTUAL_PYTHONPATH
-        set -gx PYTHONPATH $_OLD_VIRTUAL_PYTHONPATH
-        set -e _OLD_VIRTUAL_PYTHONPATH
-    else
-        set -e PYTHONPATH
-    end"""
-
-        # Find and modify the deactivate function
-        if "set -e VIRTUAL_ENV" in content:
-            content = content.replace(
-                "set -e VIRTUAL_ENV", deactivate_section + "\n    set -e VIRTUAL_ENV"
-            )
-
-        # Write the modified script
-        with open(activate_script, "w") as f:
-            f.write(content)
-
-    def _modify_csh_activate(
-        self, venv_path: Union[str, Path], parent_path: Union[str, Path]
-    ) -> None:
-        """Modify the C shell activate script"""
-        venv_path = Path(venv_path)
-        parent_path = Path(parent_path)
-        activate_script = venv_path / "bin" / "activate.csh"
-
-        if not activate_script.exists():
-            print(f"Warning: C shell activate script not found at {activate_script}")
-            return
-
-        # Read the original script
-        with open(activate_script) as f:
-            content = f.read()
-
-        # Add hierarchy support for C shell
-        if self.is_windows:
-            # Windows paths for C shell - use safe path helper for cross-platform compatibility
-            parent_path_safe = self._get_safe_path_string(
-                parent_path, for_windows_script=False
-            )
-            hierarchy_code = f'''
-# Hierarchical environment support - include parent libraries
-set PARENT_VENV_PATH = "{parent_path_safe}"
-if ( -d "$PARENT_VENV_PATH" ) then
-    # Store old PYTHONPATH
-    if ( $?PYTHONPATH ) then
-        setenv _OLD_VIRTUAL_PYTHONPATH "$PYTHONPATH"
-    endif
-
-    # Add parent site-packages to PYTHONPATH (Windows structure)
-    foreach parent_site ( "$PARENT_VENV_PATH"/Lib/site-packages )
-        if ( -d "$parent_site" ) then
-            if ( ! $?PYTHONPATH ) then
-                setenv PYTHONPATH "$parent_site"
-            else
-                setenv PYTHONPATH "$PYTHONPATH:$parent_site"
-            endif
-        endif
-    end
-endif
-
-'''
-        else:
-            # Unix paths for C shell - use safe path helper for consistency
-            parent_path_safe = self._get_safe_path_string(
-                parent_path, for_windows_script=False
-            )
-            hierarchy_code = f'''
-# Hierarchical environment support - include parent libraries
-set PARENT_VENV_PATH = "{parent_path_safe}"
-if ( -d "$PARENT_VENV_PATH" ) then
-    # Store old PYTHONPATH
-    if ( $?PYTHONPATH ) then
-        setenv _OLD_VIRTUAL_PYTHONPATH "$PYTHONPATH"
-    endif
-
-    # Add parent site-packages to PYTHONPATH (appended, so child takes precedence)
-    foreach parent_site ( "$PARENT_VENV_PATH"/lib/python*/site-packages )
-        if ( -d "$parent_site" ) then
-            if ( ! $?PYTHONPATH ) then
-                setenv PYTHONPATH "$parent_site"
-            else
-                setenv PYTHONPATH "$PYTHONPATH:$parent_site"
-            endif
-        endif
-    end
-endif
-
-'''
-
-        # Insert at the end of the script
-        content = content + hierarchy_code
-
-        # Add PYTHONPATH restoration to deactivate alias
-        deactivate_addition = """
-    if ( $?_OLD_VIRTUAL_PYTHONPATH ) then
-        setenv PYTHONPATH "$_OLD_VIRTUAL_PYTHONPATH"
-        unsetenv _OLD_VIRTUAL_PYTHONPATH
-    else
-        if ( $?PYTHONPATH ) then
-            unsetenv PYTHONPATH
-        endif
-    endif"""
-
-        # Find and modify the deactivate section
-        if "unsetenv VIRTUAL_ENV" in content:
-            content = content.replace(
-                "unsetenv VIRTUAL_ENV",
-                deactivate_addition + "\n    unsetenv VIRTUAL_ENV",
-            )
-
-        # Write the modified script
-        with open(activate_script, "w") as f:
-            f.write(content)
-
-    def _modify_windows_batch_activate(
-        self, venv_path: Union[str, Path], parent_path: Union[str, Path]
-    ) -> None:
-        """Modify the Windows batch activate script"""
-        venv_path = Path(venv_path)
-        parent_path = Path(parent_path)
-        activate_script = venv_path / "Scripts" / "activate.bat"
-
-        if not activate_script.exists():
-            print(
-                f"Warning: Windows batch activate script not found at {activate_script}"
-            )
-            return
-
-        # Read the original script
-        with open(activate_script) as f:
-            content = f.read()
-
-        # Add hierarchy support for Windows batch - Windows uses semicolon as path separator
-        # Use safe path helper for cross-platform compatibility
-        parent_path_safe = self._get_safe_path_string(
-            parent_path, for_windows_script=True
-        )
-        hierarchy_code = f"""
-@REM Hierarchical environment support - include parent libraries
-@set "PARENT_VENV_PATH={parent_path_safe}"
-@if exist "%PARENT_VENV_PATH%" (
-    @REM Store old PYTHONPATH
-    @if defined PYTHONPATH (
-        @set "_OLD_VIRTUAL_PYTHONPATH=%PYTHONPATH%"
-    )
-
-    @REM Add parent site-packages to PYTHONPATH
-    @for /d %%i in ("%PARENT_VENV_PATH%/Lib/site-packages") do (
-        @if exist "%%i" (
-            @if not defined PYTHONPATH (
-                @set "PYTHONPATH=%%i"
-            ) else (
-                @set "PYTHONPATH=%PYTHONPATH%;%%i"
-            )
-        )
-    )
-)
-
-"""
-
-        # Insert at the end of the script
-        content = content + hierarchy_code
-
-        # Write the modified script
-        with open(activate_script, "w") as f:
-            f.write(content)
-
-    def _modify_powershell_activate(
-        self, venv_path: Union[str, Path], parent_path: Union[str, Path]
-    ) -> None:
-        """Modify the PowerShell activate script"""
-        venv_path = Path(venv_path)
-        parent_path = Path(parent_path)
-
-        # PowerShell script location differs by platform
-        if self.is_windows:
-            activate_script = venv_path / "Scripts" / "Activate.ps1"
-        else:
-            activate_script = venv_path / "bin" / "activate.ps1"
-
-        if not activate_script.exists():
-            print(f"Warning: PowerShell activate script not found at {activate_script}")
-            return
-
-        # Read the original script
-        with open(activate_script) as f:
-            content = f.read()
-
-        # Add hierarchy support for PowerShell
-        if self.is_windows:
-            # Windows PowerShell paths - use safe path helper for cross-platform compatibility
-            parent_path_safe = self._get_safe_path_string(
-                parent_path, for_windows_script=True
-            )
-            hierarchy_code = f'''
-# Hierarchical environment support - include parent libraries
-$PARENT_VENV_PATH = "{parent_path_safe}"
-if (Test-Path $PARENT_VENV_PATH) {{
-    # Store old PYTHONPATH
-    if ($env:PYTHONPATH) {{
-        $global:_OLD_VIRTUAL_PYTHONPATH = $env:PYTHONPATH
-    }}
-
-    # Add parent site-packages to PYTHONPATH (Windows uses semicolon separator)
-    $parentSites = Get-ChildItem "$PARENT_VENV_PATH/Lib/site-packages" -Directory 2>$null
-    foreach ($parentSite in $parentSites) {{
-        if (!$env:PYTHONPATH) {{
-            $env:PYTHONPATH = $parentSite.FullName
-        }} else {{
-            $env:PYTHONPATH = "$env:PYTHONPATH;" + $parentSite.FullName
-        }}
-    }}
-}}
-
-'''
-        else:
-            # Unix PowerShell paths
-            parent_path_safe = self._get_safe_path_string(
-                parent_path, for_windows_script=False
-            )
-            hierarchy_code = f'''
-# Hierarchical environment support - include parent libraries
-$PARENT_VENV_PATH = "{parent_path_safe}"
-if (Test-Path $PARENT_VENV_PATH) {{
-    # Store old PYTHONPATH
-    if ($env:PYTHONPATH) {{
-        $global:_OLD_VIRTUAL_PYTHONPATH = $env:PYTHONPATH
-    }}
-
-    # Add parent site-packages to PYTHONPATH (Unix uses colon separator)
-    $parentSites = Get-ChildItem "$PARENT_VENV_PATH/lib/python*/site-packages" -Directory 2>$null
-    foreach ($parentSite in $parentSites) {{
-        if (!$env:PYTHONPATH) {{
-            $env:PYTHONPATH = $parentSite.FullName
-        }} else {{
-            $env:PYTHONPATH = "$env:PYTHONPATH:" + $parentSite.FullName
-        }}
-    }}
-}}
-
-'''
-
-        # Insert at the end of the script
-        content = content + hierarchy_code
-
-        # Add PYTHONPATH restoration to deactivate function
-        deactivate_addition = """    if (Test-Path variable:global:_OLD_VIRTUAL_PYTHONPATH) {
-        $env:PYTHONPATH = $global:_OLD_VIRTUAL_PYTHONPATH
-        Remove-Variable "_OLD_VIRTUAL_PYTHONPATH" -Scope global
-    } else {
-        Remove-Item env:PYTHONPATH -ErrorAction SilentlyContinue
-    }
-
-"""
-
-        # Find and modify the deactivate function
-        if "Remove-Item env:VIRTUAL_ENV -ErrorAction SilentlyContinue" in content:
-            content = content.replace(
-                "Remove-Item env:VIRTUAL_ENV -ErrorAction SilentlyContinue",
-                deactivate_addition
-                + "    Remove-Item env:VIRTUAL_ENV -ErrorAction SilentlyContinue",
-            )
-
-        # Write the modified script
-        with open(activate_script, "w") as f:
-            f.write(content)
-
-    def _modify_nushell_activate(
-        self, venv_path: Union[str, Path], parent_path: Union[str, Path]
-    ) -> None:
-        """Modify the Nushell activate script"""
-        venv_path = Path(venv_path)
-        parent_path = Path(parent_path)
-        activate_script = venv_path / "bin" / "activate.nu"
-
-        if not activate_script.exists():
-            # Nushell is optional, so don't warn if missing
-            return
-
-        # Read the original script
-        with open(activate_script) as f:
-            content = f.read()
-
-        # Add hierarchy support for Nushell - this is complex due to Nushell's structure
-        # For now, we'll add a simple PYTHONPATH modification
-        # Use safe path helper for cross-platform compatibility
-        parent_path_safe = self._get_safe_path_string(
-            parent_path, for_windows_script=False
-        )
-        hierarchy_code = f'''
-    # Hierarchical environment support - include parent libraries
-    let parent_venv_path = "{parent_path_safe}"
-    if ($parent_venv_path | path exists) {{
-        let parent_sites = (glob ($parent_venv_path + "/lib/python*/site-packages"))
-        if ($parent_sites | length) > 0 {{
-            let current_pythonpath = if ($env | has-env PYTHONPATH) {{ $env.PYTHONPATH }} else {{ "" }}
-            let new_pythonpath = if ($current_pythonpath | is-empty) {{
-                ($parent_sites | str join ":")
-            }} else {{
-                ($current_pythonpath + ":" + ($parent_sites | str join ":"))
-            }}
-            $new_env = ($new_env | merge {{ PYTHONPATH: $new_pythonpath }})
-        }}
-    }}
-'''
-
-        # Insert before load-env call
-        if "load-env $new_env" in content:
-            content = content.replace(
-                "load-env $new_env", hierarchy_code + "    load-env $new_env"
-            )
-
-        # Write the modified script
-        with open(activate_script, "w") as f:
-            f.write(content)
-
-    def _modify_activate_this_py(
-        self, venv_path: Union[str, Path], parent_path: Union[str, Path]
-    ) -> None:
-        """Modify the activate_this.py script"""
-        venv_path = Path(venv_path)
-        parent_path = Path(parent_path)
-
-        # activate_this.py location differs by platform
-        if self.is_windows:
-            activate_this = venv_path / "Scripts" / "activate_this.py"
-        else:
-            activate_this = venv_path / "bin" / "activate_this.py"
-
-        if not activate_this.exists():
-            print(f"Warning: activate_this.py not found at {activate_this}")
-            return
-
-        # Read the original script
-        with open(activate_this) as f:
-            content = f.read()
-
-        # Find the sys.path modification section (more flexible matching)
-        old_pattern = (
-            r"# add the virtual environments libraries.*?sys\.path\[:] = .*?\n"
-        )
-
-        # Create the new hierarchical version with platform-specific paths
-        if self.is_windows:
-            child_lib_pattern_code = (
-                'os.path.join(bin_dir, "..", "Lib", "site-packages")'
-            )
-            parent_path_safe = self._get_safe_path_string(
-                parent_path, for_windows_script=False
-            )
-            parent_lib_pattern_code = (
-                f'os.path.join("{parent_path_safe}", "Lib", "site-packages")'
-            )
-        else:
-            child_lib_pattern_code = (
-                'os.path.join(bin_dir, "..", "lib", "python*", "site-packages")'
-            )
-            parent_path_safe = self._get_safe_path_string(
-                parent_path, for_windows_script=False
-            )
-            parent_lib_pattern_code = (
-                f'os.path.join("{parent_path_safe}", "lib", "python*", "site-packages")'
-            )
-
-        new_syspath_section = f'''# add the virtual environments libraries to the host python import mechanism
-import glob
-prev_length = len(sys.path)
-
-# Add child environment libraries first (highest precedence)
-child_lib_pattern = {child_lib_pattern_code}
-for child_site_packages in glob.glob(child_lib_pattern):
-    if os.path.exists(child_site_packages):
-        site.addsitedir(child_site_packages)
-
-# Add parent environment libraries (lower precedence)
-parent_venv_path = "{parent_path_safe}"
-if os.path.exists(parent_venv_path):
-    parent_lib_pattern = {parent_lib_pattern_code}
-    for parent_site_packages in glob.glob(parent_lib_pattern):
-        if os.path.exists(parent_site_packages):
-            site.addsitedir(parent_site_packages)
-
-# Move new paths to front for proper precedence (child first, then parent)
-new_paths = sys.path[prev_length:]
-sys.path[prev_length:] = []
-sys.path[:0] = new_paths
-'''
-
-        # Replace the section using regex
-        content = re.sub(old_pattern, new_syspath_section, content, flags=re.DOTALL)
-
-        # Write the modified script
-        with open(activate_this, "w") as f:
-            f.write(content)
+        # Append the hierarchy code
+        modified_content = content + hierarchy_code
+
+        # Write back the modified content
+        with open(virtualenv_py_path, "w") as f:
+            f.write(modified_content)
 
     def _get_current_venv(self) -> Path | None:
         """
@@ -1606,216 +1256,67 @@ def main() -> None:
     # Check if this is a huv-specific command that needs special handling
     if len(sys.argv) >= 2:
         if sys.argv[1] == "venv":
-            # Handle all venv creation through our create_venv method
-            parser = argparse.ArgumentParser(
-                description="Create virtual environment (with optional hierarchy)",
-                formatter_class=argparse.RawDescriptionHelpFormatter,
-                epilog="All standard uv venv options are supported alongside --parent",
-            )
-            parser.add_argument("command")  # venv
-            parser.add_argument("path", help="Path for the virtual environment")
+            # Use dynamic argument parser to handle all uv venv options
+            try:
+                parser = DynamicArgumentParser(huv.uv_executable)
+                args = sys.argv[2:]  # Skip 'huv' and 'venv'
 
-            # Hierarchical option (huv-specific)
-            parser.add_argument("--parent", help="Parent virtual environment path")
+                # Handle help requests
+                if "--help" in args or "-h" in args:
+                    help_output = parser._get_uv_help_output()
+                    # Inject our --parent option into the help
+                    help_lines = help_output.split("\n")
+                    for i, line in enumerate(help_lines):
+                        if line.strip().startswith("Options:"):
+                            help_lines.insert(i + 1, "      --parent <PARENT>")
+                            help_lines.insert(
+                                i + 2,
+                                "          Parent virtual environment path for hierarchy",
+                            )
+                            break
+                    print("\n".join(help_lines))
+                    return
 
-            # Core venv options
-            parser.add_argument(
-                "--no-project",
-                action="store_true",
-                help="Avoid discovering a project or workspace",
-            )
-            parser.add_argument(
-                "--seed",
-                action="store_true",
-                help="Install seed packages (pip, setuptools, wheel)",
-            )
-            parser.add_argument(
-                "-c",
-                "--clear",
-                action="store_true",
-                help="Remove existing files at target path",
-            )
-            parser.add_argument(
-                "--allow-existing",
-                action="store_true",
-                help="Preserve existing files at target path",
-            )
-            parser.add_argument(
-                "--prompt", help="Alternative prompt prefix for the virtual environment"
-            )
-            parser.add_argument(
-                "--system-site-packages",
-                action="store_true",
-                help="Give access to system site packages",
-            )
-            parser.add_argument(
-                "--relocatable",
-                action="store_true",
-                help="Make the virtual environment relocatable",
-            )
+                parsed_args = parser.parse_args(args)
 
-            # Python options
-            parser.add_argument(
-                "-p",
-                "--python",
-                help="Python interpreter to use for the virtual environment",
-            )
-            parser.add_argument(
-                "--managed-python",
-                action="store_true",
-                help="Require use of uv-managed Python versions",
-            )
-            parser.add_argument(
-                "--no-managed-python",
-                action="store_true",
-                help="Disable use of uv-managed Python versions",
-            )
-            parser.add_argument(
-                "--no-python-downloads",
-                action="store_true",
-                help="Disable automatic downloads of Python",
-            )
+                if not parsed_args.path:
+                    print("Error: venv command requires a path argument")
+                    return
 
-            # Index options
-            parser.add_argument(
-                "--index",
-                action="append",
-                help="URLs to use when resolving dependencies",
-            )
-            parser.add_argument(
-                "--default-index", help="URL of the default package index"
-            )
-            parser.add_argument(
-                "-i", "--index-url", help="URL of the Python package index (deprecated)"
-            )
-            parser.add_argument(
-                "--extra-index-url",
-                action="append",
-                help="Extra URLs of package indexes (deprecated)",
-            )
-            parser.add_argument(
-                "-f",
-                "--find-links",
-                action="append",
-                help="Locations to search for candidate distributions",
-            )
-            parser.add_argument(
-                "--no-index", action="store_true", help="Ignore the registry index"
-            )
+                venv_path = parsed_args.path
+                parent = getattr(parsed_args, "parent", None)
 
-            # Performance and cache options
-            parser.add_argument(
-                "--index-strategy",
-                choices=["first-index", "unsafe-first-match", "unsafe-best-match"],
-                help="Strategy when resolving against multiple index URLs",
-            )
-            parser.add_argument(
-                "--keyring-provider",
-                choices=["disabled", "subprocess"],
-                help="Attempt to use keyring for authentication",
-            )
-            parser.add_argument(
-                "--exclude-newer",
-                help="Limit packages to those uploaded prior to given date",
-            )
-            parser.add_argument(
-                "--exclude-newer-package",
-                action="append",
-                help="Limit specific packages to older versions",
-            )
-            parser.add_argument(
-                "--link-mode",
-                choices=["clone", "copy", "hardlink", "symlink"],
-                help="Method to use when installing packages from global cache",
-            )
-            parser.add_argument(
-                "--refresh", action="store_true", help="Refresh all cached data"
-            )
-            parser.add_argument(
-                "-n",
-                "--no-cache",
-                action="store_true",
-                help="Avoid reading from or writing to cache",
-            )
-            parser.add_argument("--cache-dir", help="Path to the cache directory")
-            parser.add_argument(
-                "--refresh-package",
-                action="append",
-                help="Refresh cached data for specific packages",
-            )
+                # Collect all uv arguments (both known and unknown) for passthrough
+                remaining_uv_args = []
 
-            args, unknown_args = parser.parse_known_args()
+                # Add known arguments (excluding huv-specific ones)
+                for attr_name in vars(parsed_args):
+                    if attr_name in ["path", "parent", "unknown_args"]:
+                        continue
+                    value = getattr(parsed_args, attr_name)
+                    if value is not None and value is not False:
+                        # Convert back to command line format
+                        flag = "--" + attr_name.replace("_", "-")
+                        if value is True:
+                            remaining_uv_args.append(flag)
+                        elif isinstance(value, list):
+                            for item in value:
+                                remaining_uv_args.extend([flag, str(item)])
+                        else:
+                            remaining_uv_args.extend([flag, str(value)])
 
-            # Build uv_args from parsed arguments
-            uv_args = []
-            if hasattr(args, "no_project") and args.no_project:
-                uv_args.append("--no-project")
-            if hasattr(args, "seed") and args.seed:
-                uv_args.append("--seed")
-            if hasattr(args, "clear") and args.clear:
-                uv_args.extend(["-c"])
-            if hasattr(args, "allow_existing") and args.allow_existing:
-                uv_args.append("--allow-existing")
-            if hasattr(args, "prompt") and args.prompt:
-                uv_args.extend(["--prompt", args.prompt])
-            if hasattr(args, "system_site_packages") and args.system_site_packages:
-                uv_args.append("--system-site-packages")
-            if hasattr(args, "relocatable") and args.relocatable:
-                uv_args.append("--relocatable")
+                # Add unknown arguments
+                if hasattr(parsed_args, "unknown_args"):
+                    remaining_uv_args.extend(parsed_args.unknown_args)
 
-            # Python options
-            if hasattr(args, "python") and args.python:
-                uv_args.extend(["-p", args.python])
-            if hasattr(args, "managed_python") and args.managed_python:
-                uv_args.append("--managed-python")
-            if hasattr(args, "no_managed_python") and args.no_managed_python:
-                uv_args.append("--no-managed-python")
-            if hasattr(args, "no_python_downloads") and args.no_python_downloads:
-                uv_args.append("--no-python-downloads")
+                huv.create_venv(venv_path, parent, remaining_uv_args)
 
-            # Index options
-            if hasattr(args, "index") and args.index:
-                for idx in args.index:
-                    uv_args.extend(["--index", idx])
-            if hasattr(args, "default_index") and args.default_index:
-                uv_args.extend(["--default-index", args.default_index])
-            if hasattr(args, "index_url") and args.index_url:
-                uv_args.extend(["-i", args.index_url])
-            if hasattr(args, "extra_index_url") and args.extra_index_url:
-                for url in args.extra_index_url:
-                    uv_args.extend(["--extra-index-url", url])
-            if hasattr(args, "find_links") and args.find_links:
-                for link in args.find_links:
-                    uv_args.extend(["-f", link])
-            if hasattr(args, "no_index") and args.no_index:
-                uv_args.append("--no-index")
-
-            # Performance options
-            if hasattr(args, "index_strategy") and args.index_strategy:
-                uv_args.extend(["--index-strategy", args.index_strategy])
-            if hasattr(args, "keyring_provider") and args.keyring_provider:
-                uv_args.extend(["--keyring-provider", args.keyring_provider])
-            if hasattr(args, "exclude_newer") and args.exclude_newer:
-                uv_args.extend(["--exclude-newer", args.exclude_newer])
-            if hasattr(args, "exclude_newer_package") and args.exclude_newer_package:
-                for pkg in args.exclude_newer_package:
-                    uv_args.extend(["--exclude-newer-package", pkg])
-            if hasattr(args, "link_mode") and args.link_mode:
-                uv_args.extend(["--link-mode", args.link_mode])
-            if hasattr(args, "refresh") and args.refresh:
-                uv_args.append("--refresh")
-            if hasattr(args, "no_cache") and args.no_cache:
-                uv_args.append("-n")
-            if hasattr(args, "cache_dir") and args.cache_dir:
-                uv_args.extend(["--cache-dir", args.cache_dir])
-            if hasattr(args, "refresh_package") and args.refresh_package:
-                for pkg in args.refresh_package:
-                    uv_args.extend(["--refresh-package", pkg])
-
-            # Add any unknown args
-            uv_args.extend(unknown_args)
-
-            huv.create_venv(args.path, args.parent, uv_args)
+            except Exception as e:
+                print(f"Error parsing arguments: {e}", file=sys.stderr)
+                print("Falling back to direct uv call...")
+                # Fallback: pass all arguments directly to uv
+                remaining_args = sys.argv[2:]  # Skip 'huv' and 'venv'
+                huv.passthrough_command(["venv"] + remaining_args)
             return
 
         elif (

@@ -13,14 +13,6 @@ import unittest
 from pathlib import Path
 
 
-def get_venv_bin_dir(venv_path):
-    """Get the appropriate bin/Scripts directory for the current platform"""
-    if platform.system() == "Windows":
-        return venv_path / "Scripts"
-    else:
-        return venv_path / "bin"
-
-
 def get_activate_script(venv_path):
     """Get the appropriate activation script for the current platform"""
     if platform.system() == "Windows":
@@ -43,6 +35,27 @@ def get_pip_executable(venv_path):
         return venv_path / "Scripts" / "pip.exe"
     else:
         return venv_path / "bin" / "pip"
+
+
+def get_virtualenv_py(venv_path):
+    """Find the _virtualenv.py file in the virtual environment"""
+    if platform.system() == "Windows":
+        site_packages = venv_path / "Lib" / "site-packages"
+    else:
+        # Find the python version directory dynamically
+        lib_dir = venv_path / "lib"
+        python_dirs = list(lib_dir.glob("python*"))
+        if python_dirs:
+            site_packages = python_dirs[0] / "site-packages"
+        else:
+            # Fallback to current Python version
+            site_packages = (
+                lib_dir
+                / f"python{sys.version_info.major}.{sys.version_info.minor}"
+                / "site-packages"
+            )
+
+    return site_packages / "_virtualenv.py"
 
 
 def get_activate_this_py(venv_path):
@@ -123,16 +136,24 @@ class TestHuv(unittest.TestCase):
         self.assertTrue(parent_path.exists())
         self.assertTrue(child_path.exists())
 
-        # Verify child has hierarchy setup
-        activate_script = get_activate_script(child_path)
-        self.assertTrue(activate_script.exists())
+        # Verify child has hierarchy setup in pyvenv.cfg
+        pyvenv_cfg = child_path / "pyvenv.cfg"
+        self.assertTrue(pyvenv_cfg.exists())
 
-        with open(activate_script) as f:
+        with open(pyvenv_cfg) as f:
             content = f.read()
-            self.assertIn("PARENT_VENV_PATH", content)
-            # Convert path to the format used in activation scripts (forward slashes for Unicode safety)
-            expected_path = str(parent_path.resolve()).replace("\\", "/")
+            self.assertIn("huv_parent =", content)
+            expected_path = str(parent_path.resolve())
             self.assertIn(expected_path, content)
+
+        # Verify _virtualenv.py has hierarchy code
+        virtualenv_py = get_virtualenv_py(child_path)
+        self.assertTrue(virtualenv_py.exists())
+
+        with open(virtualenv_py) as f:
+            content = f.read()
+            self.assertIn("_setup_huv_hierarchy", content)
+            self.assertIn("huv_parent =", content)
 
     def test_python_version_inheritance(self):
         """Test that child environments inherit parent Python version"""
@@ -220,24 +241,25 @@ class TestHuv(unittest.TestCase):
         result = self.run_huv(["venv", venv_name], expect_success=False)
         self.assertNotEqual(result.returncode, 0)
 
-    def test_activate_this_py_modification(self):
-        """Test that activate_this.py is properly modified for hierarchical environments"""
-        parent_name = "test_activate_parent"
-        child_name = "test_activate_child"
+    def test_virtualenv_py_modification(self):
+        """Test that _virtualenv.py is properly modified for hierarchical environments"""
+        parent_name = "test_virtualenv_parent"
+        child_name = "test_virtualenv_child"
 
         # Create parent and child environments
         self.run_huv(["venv", parent_name])
         self.run_huv(["venv", child_name, "--parent", parent_name])
 
-        # Check activate_this.py exists and has hierarchy setup
-        activate_this = get_activate_this_py(self.test_dir / child_name)
-        self.assertTrue(activate_this.exists())
+        # Check _virtualenv.py exists and has hierarchy setup
+        child_path = self.test_dir / child_name
+        virtualenv_py = get_virtualenv_py(child_path)
+        self.assertTrue(virtualenv_py.exists())
 
-        with open(activate_this) as f:
+        with open(virtualenv_py) as f:
             content = f.read()
-            self.assertIn("parent_venv_path", content)
-            self.assertIn("site.addsitedir", content)
-            self.assertIn("glob.glob", content)
+            self.assertIn("_setup_huv_hierarchy", content)
+            self.assertIn("huv_parent =", content)
+            self.assertIn("sys.path", content)
 
     def test_uv_arguments_passthrough(self):
         """Test that uv arguments are properly passed through"""
@@ -267,11 +289,17 @@ class TestHuv(unittest.TestCase):
         self.assertTrue(parent_pip.exists())
         self.assertTrue(child_pip.exists())
 
-        # Verify hierarchy setup
-        activate_script = get_activate_script(self.test_dir / child_name)
-        with open(activate_script) as f:
+        # Verify hierarchy setup in pyvenv.cfg and _virtualenv.py
+        child_path = self.test_dir / child_name
+        pyvenv_cfg = child_path / "pyvenv.cfg"
+        with open(pyvenv_cfg) as f:
             content = f.read()
-            self.assertIn("PARENT_VENV_PATH", content)
+            self.assertIn("huv_parent =", content)
+
+        virtualenv_py = get_virtualenv_py(child_path)
+        with open(virtualenv_py) as f:
+            content = f.read()
+            self.assertIn("_setup_huv_hierarchy", content)
 
     def test_multiple_hierarchy_levels(self):
         """Test creating multiple levels of hierarchy"""
@@ -453,28 +481,24 @@ class TestHuvIntegration(unittest.TestCase):
             self.assertIn("huv_parent", content)
             self.assertIn(str(parent_path.resolve()), content)
 
-        # Check that activation scripts are modified correctly for current platform
-        is_windows = platform.system() == "Windows"
+        # Check that hierarchy is set up correctly via _virtualenv.py
+        virtualenv_py = get_virtualenv_py(child_path)
+        self.assertTrue(virtualenv_py.exists())
 
-        if is_windows:
-            # Check Windows batch script
-            batch_script = child_path / "Scripts" / "activate.bat"
-            if batch_script.exists():
-                with open(batch_script) as f:
-                    content = f.read()
-                    # Should contain PYTHONPATH modification with Windows path separators
-                    self.assertIn("PYTHONPATH", content)
-        else:
-            # Check Unix shell script
-            shell_script = child_path / "bin" / "activate"
-            if shell_script.exists():
-                with open(shell_script) as f:
-                    content = f.read()
-                    # Should contain PYTHONPATH modification with Unix path separators
-                    self.assertIn("PYTHONPATH", content)
-                    # Convert path to the format used in activation scripts (forward slashes for Unicode safety)
-                    expected_path = str(parent_path.resolve()).replace("\\", "/")
-                    self.assertIn(expected_path, content)
+        with open(virtualenv_py) as f:
+            content = f.read()
+            # Should contain hierarchy setup function
+            self.assertIn("_setup_huv_hierarchy", content)
+            self.assertIn("huv_parent =", content)
+            self.assertIn("sys.path", content)
+
+        # Verify pyvenv.cfg has parent reference
+        pyvenv_cfg = child_path / "pyvenv.cfg"
+        with open(pyvenv_cfg) as f:
+            cfg_content = f.read()
+            self.assertIn("huv_parent =", cfg_content)
+            expected_path = str(parent_path.resolve())
+            self.assertIn(expected_path, cfg_content)
 
     def test_cross_platform_package_inheritance(self):
         """Test that package inheritance works correctly across platforms"""
