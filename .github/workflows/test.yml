@@ -169,17 +169,10 @@ jobs:
           echo "$output" | grep -q "Using parent's Python version"
 
           # Test with additional arguments
-          #./huv venv test-seed-parent --seed
-          #./huv venv test-seed-child --parent test-seed-parent --seed
-          ## Test that pip is available (check file existence OR functionality)
-          #if test -f test-seed-child/bin/pip; then
-          #  echo "pip file found directly"
-          #elif test-seed-child/bin/python -m pip --version >/dev/null 2>&1; then
-          #  echo "pip available via python -m pip"
-          #else
-          #  echo "pip not available in child environment"
-          #  exit 1
-          #fi
+          ./huv venv test-seed-parent --seed
+          ./huv venv test-seed-child --parent test-seed-parent
+          # Test that child can access pip from parent via PATH inheritance
+          test-seed-child/bin/python -m pip --version
 
       - name: Test complete workflow (Windows)
         if: runner.os == 'Windows'
@@ -205,19 +198,9 @@ jobs:
 
           # Test with additional arguments
           python huv venv test-seed-parent --seed
-          python huv venv test-seed-child --parent test-seed-parent --seed
-          # Test that pip is available (check file existence OR functionality)
-          if (Test-Path "test-seed-child\Scripts\pip.exe") {
-            Write-Host "pip.exe found directly"
-          } else {
-            & "test-seed-child\Scripts\python.exe" -m pip --version 2>$null
-            if ($LASTEXITCODE -eq 0) {
-              Write-Host "pip available via python -m pip"
-            } else {
-              Write-Host "pip not available in child environment"
-              exit 1
-            }
-          }
+          python huv venv test-seed-child --parent test-seed-parent
+          # Test that child can access pip from parent via PATH inheritance
+          & "test-seed-child\Scripts\python.exe" -m pip --version
         shell: powershell
 
       - name: Test error conditions (Unix)

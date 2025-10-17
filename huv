@@ -594,6 +594,34 @@ def _setup_huv_hierarchy():
                 # No current venv paths found, append
                 sys.path.append(parent_site)
 
+    # Add parent bin directory to PATH so child can use parent's executables
+    if os.name == 'nt':  # Windows
+        parent_bin_dir = os.path.join(parent_path, "Scripts")
+    else:  # Unix-like
+        parent_bin_dir = os.path.join(parent_path, "bin")
+
+    if os.path.exists(parent_bin_dir):
+        current_path = os.environ.get('PATH', '')
+        if parent_bin_dir not in current_path:
+            # Add parent bin directory to PATH after current venv bin
+            path_parts = current_path.split(os.pathsep)
+            # Find current venv bin directory in PATH
+            current_venv_bin = None
+            if os.name == 'nt':
+                current_venv_bin = os.path.join(sys.prefix, "Scripts")
+            else:
+                current_venv_bin = os.path.join(sys.prefix, "bin")
+ 
+            if current_venv_bin in path_parts:
+                # Insert parent bin after current venv bin
+                insert_idx = path_parts.index(current_venv_bin) + 1
+                path_parts.insert(insert_idx, parent_bin_dir)
+            else:
+                # Prepend parent bin to ensure it's found
+                path_parts.insert(0, parent_bin_dir)
+ 
+            os.environ['PATH'] = os.pathsep.join(path_parts)
+
 # Set up hierarchy automatically when _virtualenv.py is imported
 try:
     _setup_huv_hierarchy()
