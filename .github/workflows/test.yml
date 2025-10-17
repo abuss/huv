@@ -171,7 +171,8 @@ jobs:
           # Test with additional arguments
           ./huv venv test-seed-parent --seed
           ./huv venv test-seed-child --parent test-seed-parent --seed
-          test -f test-seed-child/bin/pip
+          # Test that pip is functional in the child environment
+          test-seed-child/bin/python -m pip --version
 
       - name: Test complete workflow (Windows)
         if: runner.os == 'Windows'
