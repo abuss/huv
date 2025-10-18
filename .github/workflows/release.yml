@@ -1,0 +1,25 @@
+name: release
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*"
+jobs:
+  publish:
+    permissions:
+      id-token: write
+      contents: read
+    runs-on: ubuntu-latest
+
+    environment:
+      name: pypi
+      url: http://pypi.org/p/huv
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+      - run: uv build
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.13.0
